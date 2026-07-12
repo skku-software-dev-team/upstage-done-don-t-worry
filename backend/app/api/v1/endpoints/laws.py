@@ -12,7 +12,7 @@ from app.services.upstage import embed_text, parse_document
 router = APIRouter(prefix="/laws", tags=["laws"])
 
 
-@router.get("/", response_model=list[LawRead])
+@router.get("", response_model=list[LawRead])
 async def list_laws(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Law).order_by(Law.name))
     return result.scalars().all()

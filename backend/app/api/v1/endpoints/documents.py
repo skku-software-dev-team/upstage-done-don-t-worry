@@ -12,13 +12,13 @@ from app.services.upstage import embed_text, parse_document
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
-@router.get("/", response_model=list[DocumentRead])
+@router.get("", response_model=list[DocumentRead])
 async def list_documents(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Document).order_by(Document.created_at.desc()))
     return result.scalars().all()
 
 
-@router.post("/", response_model=DocumentRead, status_code=201)
+@router.post("", response_model=DocumentRead, status_code=201)
 async def create_document(body: DocumentCreate, db: AsyncSession = Depends(get_db)):
     doc = Document(**body.model_dump())
     db.add(doc)

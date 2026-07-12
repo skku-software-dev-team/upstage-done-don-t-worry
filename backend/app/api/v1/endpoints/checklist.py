@@ -17,7 +17,7 @@ async def list_categories(db: AsyncSession = Depends(get_db)):
     return result.scalars().all()
 
 
-@router.get("/", response_model=list[CanonicalItemRead])
+@router.get("", response_model=list[CanonicalItemRead])
 async def list_canonical_items(
     category_id: uuid.UUID | None = Query(default=None, description="카테고리로 필터링"),
     db: AsyncSession = Depends(get_db),
