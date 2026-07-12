@@ -46,17 +46,41 @@ async def upload_and_parse(
     content = await file.read()
     parsed = await parse_document(content, file.filename or "upload.pdf")
 
-    pages = parsed.get("pages", [])
-    for page in pages:
-        clause = Clause(
-            document_id=doc_id,
-            requirement=page.get("text", ""),
-        )
+    # Document Parse returns elements[] grouped by category
+    # heading* = clause boundary, paragraph/table = requirement body
+    elements = parsed.get("elements", [])
+    HEADING_CATS = {"heading1", "heading2", "heading3", "heading4"}
+    LAW_KEYWORDS = ("관련 법규", "법적 근거", "관련 법령", "관련법령")
+
+    clauses: list[Clause] = []
+    current: dict | None = None
+
+    for el in elements:
+        cat = el.get("category", "")
+        text = (el.get("content") or {}).get("markdown", "").strip()
+        page = el.get("page", 0)
+
+        if cat in HEADING_CATS:
+            if current:
+                clauses.append(current)
+            current = {"clause_no": None, "title": text.lstrip("# "), "requirement": "", "related_laws_raw": "", "page": page}
+        elif current is not None and text:
+            if any(kw in text for kw in LAW_KEYWORDS):
+                current["related_laws_raw"] += text + "\n"
+            else:
+                current["requirement"] += text + "\n"
+
+    if current:
+        clauses.append(current)
+
+    for c in clauses:
+        clause = Clause(document_id=doc_id, **{k: (v.strip() or None) for k, v in c.items()})
         db.add(clause)
         await db.flush()
 
-        vec = await embed_text(clause.requirement or "")
-        db.add(Embedding(source_type="clause", source_id=clause.id, embedding=vec))
+        if clause.requirement:
+            vec = await embed_text(clause.requirement)
+            db.add(Embedding(source_type="clause", source_id=clause.id, embedding=vec))
 
     await db.commit()
-    return {"message": "Parsed and embedded", "pages": len(pages)}
+    return {"message": "Parsed and embedded", "pages": len(clauses)}
