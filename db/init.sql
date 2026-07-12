@@ -81,10 +81,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
     UNIQUE (source_type, source_id)
 );
 
--- ivfflat은 2000차원 제한 → 4096차원에는 hnsw 사용
-CREATE INDEX IF NOT EXISTS embeddings_vector_idx
-    ON embeddings USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
-
+-- pgvector ivfflat/hnsw 모두 2000차원 제한 → 4096차원은 exact scan 사용
+-- (조항 수천 건 규모에서 성능 충분, 추후 차원 축소 시 인덱스 추가)
 CREATE INDEX IF NOT EXISTS embeddings_source_idx
     ON embeddings (source_type, source_id);
