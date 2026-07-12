@@ -25,6 +25,21 @@ export interface CanonicalItem {
   merged_title: string;
 }
 
+export interface Category {
+  id: string;
+  name: string;
+}
+
+export interface ChecklistItemDetail {
+  id: string;
+  merged_title: string;
+  category_id: string | null;
+  category_name: string | null;
+  document_id: string | null;
+  doc_type: string | null;
+  document_name: string | null;
+}
+
 export interface OrgStatus {
   id: string;
   org_id: string;
@@ -39,16 +54,38 @@ export interface ChatResponse {
   sources: Clause[];
 }
 
+export interface UploadResult {
+  message: string;
+  clauses: number;
+  checklist_items: number;
+}
+
 export const documentsApi = {
   list: () => client.get<Document[]>("/documents").then((r) => r.data),
-  create: (data: Omit<Document, "id" | "created_at">) =>
+  create: (data: Pick<Document, "name" | "doc_type">) =>
     client.post<Document>("/documents", data).then((r) => r.data),
+  delete: (docId: string) => client.delete(`/documents/${docId}`),
   clauses: (docId: string) =>
     client.get<Clause[]>(`/documents/${docId}/clauses`).then((r) => r.data),
+  upload: (docId: string, formData: FormData) =>
+    client
+      .post<UploadResult>(`/documents/${docId}/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      .then((r) => r.data),
 };
 
 export const checklistApi = {
-  list: () => client.get<CanonicalItem[]>("/checklist").then((r) => r.data),
+  list: (params?: { categoryId?: string; documentId?: string }) =>
+    client
+      .get<ChecklistItemDetail[]>("/checklist", {
+        params: {
+          category_id: params?.categoryId,
+          document_id: params?.documentId,
+        },
+      })
+      .then((r) => r.data),
+  categories: () => client.get<Category[]>("/checklist/categories").then((r) => r.data),
   orgStatus: (orgId: string) =>
     client.get<OrgStatus[]>(`/checklist/org/${orgId}`).then((r) => r.data),
   updateStatus: (orgId: string, canonicalId: string, status: string, jiraKey?: string) =>
