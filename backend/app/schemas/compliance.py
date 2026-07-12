@@ -24,6 +24,7 @@ class DocumentRead(DocumentBase):
 class ClauseBase(BaseModel):
     document_id: uuid.UUID
     clause_no: str | None = None
+    title: str | None = None
     requirement: str | None = None
     related_laws_raw: str | None = None
 

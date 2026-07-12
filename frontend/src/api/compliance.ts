@@ -41,13 +41,15 @@ export interface ChatResponse {
 
 export interface UploadResult {
   message: string;
-  pages: number;
+  clauses: number;
+  checklist_items: number;
 }
 
 export const documentsApi = {
   list: () => client.get<Document[]>("/documents").then((r) => r.data),
   create: (data: Pick<Document, "name" | "doc_type">) =>
     client.post<Document>("/documents", data).then((r) => r.data),
+  delete: (docId: string) => client.delete(`/documents/${docId}`),
   clauses: (docId: string) =>
     client.get<Clause[]>(`/documents/${docId}/clauses`).then((r) => r.data),
   upload: (docId: string, formData: FormData) =>

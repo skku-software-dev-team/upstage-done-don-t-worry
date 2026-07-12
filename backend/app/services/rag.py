@@ -15,7 +15,7 @@ async def search_similar_clauses(
     top_k: int = 5,
     source_type: SourceType = "all",
 ) -> list[Clause]:
-    query_vec = await embed_text(query)
+    query_vec = await embed_text(query, is_query=True)
 
     stmt = (
         select(Clause)
@@ -35,7 +35,7 @@ async def search_similar_articles(
     query: str,
     top_k: int = 5,
 ) -> list[LawArticle]:
-    query_vec = await embed_text(query)
+    query_vec = await embed_text(query, is_query=True)
 
     result = await db.execute(
         select(LawArticle)

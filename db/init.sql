@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS clauses (
     id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id      UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     clause_no        VARCHAR(50),
+    title            VARCHAR(255),
     requirement      TEXT,
     related_laws_raw TEXT,
     created_at       TIMESTAMPTZ DEFAULT NOW()

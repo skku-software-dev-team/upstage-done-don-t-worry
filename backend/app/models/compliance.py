@@ -36,6 +36,7 @@ class Clause(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"))
     clause_no: Mapped[str | None] = mapped_column(String(50))
+    title: Mapped[str | None] = mapped_column(String(255))
     requirement: Mapped[str | None] = mapped_column(Text)
     related_laws_raw: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

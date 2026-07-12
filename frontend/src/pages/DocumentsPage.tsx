@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { documentsApi } from "@/api/compliance";
 
-type UploadStatus = "idle" | "creating" | "parsing" | "success" | "error";
+type UploadStatus = "idle" | "creating" | "parsing" | "solar" | "success" | "error";
 
 export default function DocumentsPage() {
   const qc = useQueryClient();
@@ -19,6 +19,11 @@ export default function DocumentsPage() {
   const { data: docs = [], isLoading } = useQuery({
     queryKey: ["documents"],
     queryFn: documentsApi.list,
+  });
+
+  const { mutate: deleteDoc } = useMutation({
+    mutationFn: (docId: string) => documentsApi.delete(docId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["documents"] }),
   });
 
   const handleFileSelect = (f: File) => {
@@ -42,7 +47,7 @@ export default function DocumentsPage() {
 
   const resetForm = () => {
     setName("");
-    setDocType(DOC_TYPES[0]);
+    setDocType("");
     setFile(null);
     setStatus("idle");
     setMessage("");
@@ -58,24 +63,29 @@ export default function DocumentsPage() {
       setStatus("parsing");
       const formData = new FormData();
       formData.append("file", file);
+      setStatus("solar");
       const result = await documentsApi.upload(doc.id, formData);
 
       setStatus("success");
-      setMessage(`파싱 완료! 조항 ${result.pages ?? "?"}개가 저장되었습니다.`);
+      setMessage(
+        `완료! 조항 ${result.clauses ?? "?"}개, 체크리스트 ${result.checklist_items ?? "?"}개 생성됨`
+      );
       qc.invalidateQueries({ queryKey: ["documents"] });
-      setTimeout(resetForm, 3000);
+      qc.invalidateQueries({ queryKey: ["canonical-items"] });
+      setTimeout(resetForm, 4000);
     } catch {
       setStatus("error");
       setMessage("업로드 중 오류가 발생했습니다.");
     }
   };
 
-  const isUploading = status === "creating" || status === "parsing";
+  const isUploading = status === "creating" || status === "parsing" || status === "solar";
 
   const statusLabel: Record<UploadStatus, string> = {
     idle: "파싱 시작",
     creating: "⏳ 문서 생성 중...",
     parsing: "⚙️ Document AI 파싱 중...",
+    solar: "✨ Solar 체크리스트 생성 중...",
     success: "✅ 완료",
     error: "다시 시도",
   };
@@ -198,13 +208,17 @@ export default function DocumentsPage() {
           {isUploading && (
             <div style={{ marginBottom: "1rem" }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "#6b7280", marginBottom: 6 }}>
-                <span>{status === "creating" ? "문서 생성" : "Document AI 파싱"}</span>
-                <span>{status === "creating" ? "1 / 2" : "2 / 2"}</span>
+                <span>
+                  {status === "creating" ? "문서 생성" : status === "parsing" ? "Document AI 파싱" : "Solar 체크리스트 생성"}
+                </span>
+                <span>
+                  {status === "creating" ? "1 / 3" : status === "parsing" ? "2 / 3" : "3 / 3"}
+                </span>
               </div>
               <div style={{ height: 6, background: "#e5e7eb", borderRadius: 99, overflow: "hidden" }}>
                 <div style={{
                   height: "100%",
-                  width: status === "creating" ? "30%" : "80%",
+                  width: status === "creating" ? "20%" : status === "parsing" ? "55%" : "90%",
                   background: "#2563eb",
                   borderRadius: 99,
                   transition: "width 0.4s ease",
@@ -252,6 +266,7 @@ export default function DocumentsPage() {
               <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>문서명</th>
               <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>유형</th>
               <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>등록일</th>
+              <th style={{ padding: "0.75rem 1rem", width: 60 }} />
             </tr>
           </thead>
           <tbody>
@@ -272,6 +287,30 @@ export default function DocumentsPage() {
                 </td>
                 <td style={{ padding: "0.75rem 1rem", color: "#6b7280" }}>
                   {new Date(doc.created_at).toLocaleDateString("ko-KR")}
+                </td>
+                <td style={{ padding: "0.75rem 1rem" }}>
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`"${doc.name}" 문서를 삭제하시겠습니까?`)) {
+                        deleteDoc(doc.id);
+                      }
+                    }}
+                    title="삭제"
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "#9ca3af",
+                      fontSize: "1rem",
+                      padding: "0.25rem",
+                      borderRadius: 4,
+                      lineHeight: 1,
+                    }}
+                    onMouseOver={(e) => (e.currentTarget.style.color = "#dc2626")}
+                    onMouseOut={(e) => (e.currentTarget.style.color = "#9ca3af")}
+                  >
+                    ✕
+                  </button>
                 </td>
               </tr>
             ))}

@@ -37,17 +37,24 @@ async def upload_law(
     content = await file.read()
     parsed = await parse_document(content, file.filename or "law.pdf")
 
-    pages = parsed.get("pages", [])
-    for page in pages:
-        article = LawArticle(
-            law_id=law_id,
-            article_text=page.get("text", ""),
-        )
+    # Use top-level content.markdown for full document text
+    md = (parsed.get("content") or {}).get("markdown", "").strip()
+    if not md:
+        md = (parsed.get("content") or {}).get("text", "").strip()
+
+    # Split into ~500-char chunks as separate articles
+    import re as _re
+    paragraphs = [p.strip() for p in _re.split(r'\n{2,}', md) if p.strip()]
+
+    articles_created = 0
+    for para in paragraphs:
+        article = LawArticle(law_id=law_id, article_text=para)
         db.add(article)
         await db.flush()
 
-        vec = await embed_text(article.article_text or "")
+        vec = await embed_text(article.article_text)
         db.add(Embedding(source_type="law_article", source_id=article.id, embedding=vec))
+        articles_created += 1
 
     await db.commit()
-    return {"message": "Parsed and embedded", "pages": len(pages)}
+    return {"message": "Parsed and embedded", "pages": articles_created}

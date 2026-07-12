@@ -29,16 +29,15 @@ async def list_canonical_items(
     return result.scalars().all()
 
 
-@router.get("/item/{canonical_id}/status", response_model=list[OrgStatusRead])
-async def get_item_status(canonical_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(OrgStatus).where(OrgStatus.canonical_id == canonical_id)
-    )
+@router.get("/org/{org_id}", response_model=list[OrgStatusRead])
+async def list_org_status(org_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(OrgStatus))
     return result.scalars().all()
 
 
-@router.put("/item/{canonical_id}/status", response_model=OrgStatusRead)
-async def upsert_status(
+@router.put("/org/{org_id}/item/{canonical_id}", response_model=OrgStatusRead)
+async def upsert_org_status(
+    org_id: str,
     canonical_id: uuid.UUID,
     body: OrgStatusUpdate,
     db: AsyncSession = Depends(get_db),
@@ -59,3 +58,11 @@ async def upsert_status(
     await db.commit()
     await db.refresh(status)
     return status
+
+
+@router.get("/item/{canonical_id}/status", response_model=list[OrgStatusRead])
+async def get_item_status(canonical_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(OrgStatus).where(OrgStatus.canonical_id == canonical_id)
+    )
+    return result.scalars().all()
