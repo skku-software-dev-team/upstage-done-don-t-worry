@@ -39,12 +39,23 @@ export interface ChatResponse {
   sources: Clause[];
 }
 
+export interface UploadResult {
+  message: string;
+  pages: number;
+}
+
 export const documentsApi = {
   list: () => client.get<Document[]>("/documents").then((r) => r.data),
-  create: (data: Omit<Document, "id" | "created_at">) =>
+  create: (data: Pick<Document, "name" | "doc_type">) =>
     client.post<Document>("/documents", data).then((r) => r.data),
   clauses: (docId: string) =>
     client.get<Clause[]>(`/documents/${docId}/clauses`).then((r) => r.data),
+  upload: (docId: string, formData: FormData) =>
+    client
+      .post<UploadResult>(`/documents/${docId}/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      .then((r) => r.data),
 };
 
 export const checklistApi = {
