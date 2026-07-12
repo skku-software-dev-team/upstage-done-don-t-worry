@@ -81,9 +81,10 @@ CREATE TABLE IF NOT EXISTS embeddings (
     UNIQUE (source_type, source_id)
 );
 
+-- ivfflat은 2000차원 제한 → 4096차원에는 hnsw 사용
 CREATE INDEX IF NOT EXISTS embeddings_vector_idx
-    ON embeddings USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+    ON embeddings USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
 
 CREATE INDEX IF NOT EXISTS embeddings_source_idx
     ON embeddings (source_type, source_id);
