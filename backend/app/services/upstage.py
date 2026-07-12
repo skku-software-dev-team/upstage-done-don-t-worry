@@ -151,16 +151,24 @@ async def generate_checklist_items(
     categories_text = "\n".join(f"- {cat}" for cat in categories)
 
     prompt = f"""당신은 정보보호 인증 전문가입니다.
-다음은 업로드된 보안 문서의 조항 목록입니다. 이 문서를 기반으로 조직이 수행해야 할 체크리스트 항목을 20개 이내로 생성해주세요.
+다음은 업로드된 보안 문서의 조항 목록입니다. 각 조항 앞의 [번호]를 참고하세요.
+이 문서를 기반으로 조직이 수행해야 할 체크리스트 항목을 20개 이내로 생성해주세요.
 
 조항 목록:
 {summaries_text}
 
-분류 가능한 카테고리 (반드시 아래 중 하나 선택):
+# 카테고리 (아래 목록에서만 선택)
 {categories_text}
 
+중요 규칙:
+- category 값은 위 목록의 이름을 **글자 그대로, 띄어쓰기까지 정확히** 복사하세요.
+  (예: "물리보안"이 아니라 "물리적 보안", "인적보안"이 아니라 "인적 보안")
+- 목록에 없는 새로운 카테고리 이름을 만들지 마세요.
+- 여러 카테고리에 항목을 골고루 분류하세요.
+- 각 항목마다 근거가 된 조항의 [번호]를 source에 넣으세요.
+
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요:
-{{"items": [{{"title": "항목명", "category": "카테고리명"}}, ...]}}"""
+{{"items": [{{"title": "항목명", "category": "카테고리명", "source": 조항번호}}, ...]}}"""
 
     raw = await chat_completion([{"role": "user", "content": prompt}])
     match = re.search(r'\{.*\}', raw, re.DOTALL)

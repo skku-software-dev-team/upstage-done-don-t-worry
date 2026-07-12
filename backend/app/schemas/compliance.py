@@ -63,6 +63,17 @@ class CanonicalItemRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ChecklistItemDetail(BaseModel):
+    """Enriched checklist item: canonical item + category + source document."""
+    id: uuid.UUID
+    merged_title: str
+    category_id: uuid.UUID | None
+    category_name: str | None
+    document_id: uuid.UUID | None
+    doc_type: str | None
+    document_name: str | None
+
+
 class OrgStatusRead(BaseModel):
     id: uuid.UUID
     canonical_id: uuid.UUID

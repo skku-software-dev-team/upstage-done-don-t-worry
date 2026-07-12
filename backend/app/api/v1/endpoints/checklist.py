@@ -5,8 +5,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.compliance import CanonicalItem, Category, OrgStatus
-from app.schemas.compliance import CanonicalItemRead, CategoryRead, OrgStatusRead, OrgStatusUpdate
+from app.models.compliance import (
+    CanonicalItem,
+    CanonicalMap,
+    Category,
+    Clause,
+    Document,
+    OrgStatus,
+)
+from app.schemas.compliance import (
+    CategoryRead,
+    ChecklistItemDetail,
+    OrgStatusRead,
+    OrgStatusUpdate,
+)
 
 router = APIRouter(prefix="/checklist", tags=["checklist"])
 
@@ -17,16 +29,47 @@ async def list_categories(db: AsyncSession = Depends(get_db)):
     return result.scalars().all()
 
 
-@router.get("", response_model=list[CanonicalItemRead])
+@router.get("", response_model=list[ChecklistItemDetail])
 async def list_canonical_items(
     category_id: uuid.UUID | None = Query(default=None, description="카테고리로 필터링"),
+    document_id: uuid.UUID | None = Query(default=None, description="문서로 필터링"),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(CanonicalItem)
+    # canonical_item → category (name) and → clause → document (doc_type)
+    stmt = (
+        select(
+            CanonicalItem.id,
+            CanonicalItem.merged_title,
+            CanonicalItem.category_id,
+            Category.name.label("category_name"),
+            Document.id.label("document_id"),
+            Document.doc_type,
+            Document.name.label("document_name"),
+        )
+        .outerjoin(Category, Category.id == CanonicalItem.category_id)
+        .outerjoin(CanonicalMap, CanonicalMap.canonical_id == CanonicalItem.id)
+        .outerjoin(Clause, Clause.id == CanonicalMap.clause_id)
+        .outerjoin(Document, Document.id == Clause.document_id)
+        .order_by(Category.name, CanonicalItem.merged_title)
+    )
     if category_id is not None:
         stmt = stmt.where(CanonicalItem.category_id == category_id)
+    if document_id is not None:
+        stmt = stmt.where(Clause.document_id == document_id)
+
     result = await db.execute(stmt)
-    return result.scalars().all()
+    return [
+        ChecklistItemDetail(
+            id=row.id,
+            merged_title=row.merged_title,
+            category_id=row.category_id,
+            category_name=row.category_name,
+            document_id=row.document_id,
+            doc_type=row.doc_type,
+            document_name=row.document_name,
+        )
+        for row in result.all()
+    ]
 
 
 @router.get("/org/{org_id}", response_model=list[OrgStatusRead])

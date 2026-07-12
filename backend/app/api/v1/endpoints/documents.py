@@ -91,12 +91,12 @@ async def upload_and_parse(
     cat_rows = (await db.execute(select(Category))).scalars().all()
     categories = sorted(c.name for c in cat_rows)
     cat_map = {c.name: c.id for c in cat_rows}
+    # Normalized lookup (ignore spaces/·/및) so Solar variants still match a seed
+    norm_map = {_norm_cat(name): cid for name, cid in cat_map.items()}
 
-    clause_summaries = [
-        {"title": c.title, "requirement": c.requirement}
-        for c in created_clauses
-        if c.requirement
-    ]
+    # Clauses that go into the prompt, in the same 1-based order Solar sees them
+    summary_clauses = [c for c in created_clauses if c.requirement]
+    clause_summaries = [{"title": c.title, "requirement": c.requirement} for c in summary_clauses]
 
     checklist_count = 0
     if clause_summaries and categories:
@@ -108,15 +108,21 @@ async def upload_and_parse(
                 continue
 
             canonical = CanonicalItem(
-                category_id=cat_map.get(item_cat),
+                category_id=_match_category(item_cat, cat_map, norm_map),
                 merged_title=item_title,
             )
             db.add(canonical)
             await db.flush()
 
-            if created_clauses:
-                db.add(CanonicalMap(canonical_id=canonical.id, clause_id=created_clauses[0].id))
-                db.add(ChecklistItem(clause_id=created_clauses[0].id, question=item_title))
+            # Map to the source clause Solar cited ([번호] is 1-based into summary_clauses)
+            target_clause = summary_clauses[0] if summary_clauses else None
+            src = item.get("source")
+            if isinstance(src, int) and 1 <= src <= len(summary_clauses):
+                target_clause = summary_clauses[src - 1]
+
+            if target_clause is not None:
+                db.add(CanonicalMap(canonical_id=canonical.id, clause_id=target_clause.id))
+                db.add(ChecklistItem(clause_id=target_clause.id, question=item_title))
             checklist_count += 1
 
         await db.commit()
@@ -129,6 +135,38 @@ async def upload_and_parse(
         "clauses": len(created_clauses),
         "checklist_items": checklist_count,
     }
+
+
+def _norm_cat(s: str) -> str:
+    """Normalize a category name for matching: drop spaces, 및, ·, /, commas."""
+    import re as _re
+    return _re.sub(r'[\s및·,/]+', '', s)
+
+
+def _match_category(raw: str, cat_map: dict, norm_map: dict) -> uuid.UUID | None:
+    """Map a Solar-returned category string to a seeded category id.
+    Tries exact → normalized → substring → difflib closest match.
+    """
+    if not raw:
+        return None
+    if raw in cat_map:
+        return cat_map[raw]
+
+    n = _norm_cat(raw)
+    if n in norm_map:
+        return norm_map[n]
+
+    # Substring either direction (e.g. "물리보안" ⊂ "물리적보안")
+    for seed_norm, cid in norm_map.items():
+        if n and (n in seed_norm or seed_norm in n):
+            return cid
+
+    # Fuzzy closest match (handles minor variations)
+    import difflib
+    close = difflib.get_close_matches(n, list(norm_map.keys()), n=1, cutoff=0.6)
+    if close:
+        return norm_map[close[0]]
+    return None
 
 
 def _segment_document(md: str) -> list[dict]:

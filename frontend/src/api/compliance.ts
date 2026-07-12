@@ -25,6 +25,21 @@ export interface CanonicalItem {
   merged_title: string;
 }
 
+export interface Category {
+  id: string;
+  name: string;
+}
+
+export interface ChecklistItemDetail {
+  id: string;
+  merged_title: string;
+  category_id: string | null;
+  category_name: string | null;
+  document_id: string | null;
+  doc_type: string | null;
+  document_name: string | null;
+}
+
 export interface OrgStatus {
   id: string;
   org_id: string;
@@ -61,7 +76,16 @@ export const documentsApi = {
 };
 
 export const checklistApi = {
-  list: () => client.get<CanonicalItem[]>("/checklist").then((r) => r.data),
+  list: (params?: { categoryId?: string; documentId?: string }) =>
+    client
+      .get<ChecklistItemDetail[]>("/checklist", {
+        params: {
+          category_id: params?.categoryId,
+          document_id: params?.documentId,
+        },
+      })
+      .then((r) => r.data),
+  categories: () => client.get<Category[]>("/checklist/categories").then((r) => r.data),
   orgStatus: (orgId: string) =>
     client.get<OrgStatus[]>(`/checklist/org/${orgId}`).then((r) => r.data),
   updateStatus: (orgId: string, canonicalId: string, status: string, jiraKey?: string) =>
