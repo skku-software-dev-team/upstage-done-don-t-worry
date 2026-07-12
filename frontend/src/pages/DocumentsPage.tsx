@@ -2,8 +2,6 @@ import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { documentsApi } from "@/api/compliance";
 
-const DOC_TYPES = ["ISMS-P", "CSAP", "ISO27001", "KISA", "기타"];
-
 type UploadStatus = "idle" | "creating" | "parsing" | "success" | "error";
 
 export default function DocumentsPage() {
@@ -12,7 +10,7 @@ export default function DocumentsPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
-  const [docType, setDocType] = useState(DOC_TYPES[0]);
+  const [docType, setDocType] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [status, setStatus] = useState<UploadStatus>("idle");
@@ -52,7 +50,7 @@ export default function DocumentsPage() {
   };
 
   const handleSubmit = async () => {
-    if (!name.trim() || !file) return;
+    if (!name.trim() || !docType.trim() || !file) return;
     try {
       setStatus("creating");
       const doc = await documentsApi.create({ name: name.trim(), doc_type: docType });
@@ -127,13 +125,12 @@ export default function DocumentsPage() {
             </div>
             <div style={{ flex: 1 }}>
               <label style={labelStyle}>문서 유형</label>
-              <select
+              <input
                 value={docType}
                 onChange={(e) => setDocType(e.target.value)}
-                style={{ ...inputStyle, background: "white", cursor: "pointer" }}
-              >
-                {DOC_TYPES.map((t) => <option key={t}>{t}</option>)}
-              </select>
+                placeholder="예) ISMS-P, CSAP, ISO27001"
+                style={inputStyle}
+              />
             </div>
           </div>
 
@@ -219,7 +216,7 @@ export default function DocumentsPage() {
           {/* Submit */}
           <button
             onClick={handleSubmit}
-            disabled={!name.trim() || !file || isUploading || status === "success"}
+            disabled={!name.trim() || !docType.trim() || !file || isUploading || status === "success"}
             style={{
               width: "100%",
               padding: "0.75rem",
@@ -230,7 +227,7 @@ export default function DocumentsPage() {
               fontWeight: 600,
               fontSize: "0.95rem",
               cursor: (!name.trim() || !file || isUploading || status === "success") ? "not-allowed" : "pointer",
-              opacity: !name.trim() || !file ? 0.5 : 1,
+              opacity: !name.trim() || !docType.trim() || !file ? 0.5 : 1,
               transition: "background 0.2s",
             }}
           >
