@@ -1,13 +1,13 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.compliance import Document, Clause, ChecklistItem, Embedding
-from app.schemas.compliance import DocumentCreate, DocumentRead, ClauseRead
-from app.services.upstage import parse_document, embed_text
+from app.models.compliance import Clause, Document, Embedding
+from app.schemas.compliance import ClauseRead, DocumentCreate, DocumentRead
+from app.services.upstage import embed_text, parse_document
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -46,19 +46,17 @@ async def upload_and_parse(
     content = await file.read()
     parsed = await parse_document(content, file.filename or "upload.pdf")
 
-    # Simple extraction — replace with domain-specific parsing as needed
     pages = parsed.get("pages", [])
     for page in pages:
         clause = Clause(
             document_id=doc_id,
             requirement=page.get("text", ""),
-            page=page.get("page", 0),
         )
         db.add(clause)
         await db.flush()
 
         vec = await embed_text(clause.requirement or "")
-        db.add(Embedding(clause_id=clause.id, embedding=vec))
+        db.add(Embedding(source_type="clause", source_id=clause.id, embedding=vec))
 
     await db.commit()
     return {"message": "Parsed and embedded", "pages": len(pages)}

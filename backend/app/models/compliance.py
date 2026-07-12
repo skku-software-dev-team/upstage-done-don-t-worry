@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -16,7 +16,6 @@ class Document(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     doc_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    version: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     clauses: Mapped[list["Clause"]] = relationship(back_populates="document", cascade="all, delete-orphan")
@@ -37,16 +36,14 @@ class Clause(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"))
     clause_no: Mapped[str | None] = mapped_column(String(50))
-    title: Mapped[str | None] = mapped_column(Text)
     requirement: Mapped[str | None] = mapped_column(Text)
-    related_laws: Mapped[str | None] = mapped_column(Text)
-    page: Mapped[int | None] = mapped_column(Integer)
+    related_laws_raw: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     document: Mapped["Document"] = relationship(back_populates="clauses")
     checklist_items: Mapped[list["ChecklistItem"]] = relationship(back_populates="clause", cascade="all, delete-orphan")
     canonical_maps: Mapped[list["CanonicalMap"]] = relationship(back_populates="clause", cascade="all, delete-orphan")
-    embedding: Mapped["Embedding | None"] = relationship(back_populates="clause", uselist=False, cascade="all, delete-orphan")
+    law_refs: Mapped[list["ClauseLawRef"]] = relationship(back_populates="clause", cascade="all, delete-orphan")
 
 
 class ChecklistItem(Base):
@@ -55,7 +52,6 @@ class ChecklistItem(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     clause_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clauses.id", ondelete="CASCADE"))
     question: Mapped[str] = mapped_column(Text, nullable=False)
-    order_no: Mapped[int] = mapped_column(Integer, nullable=False)
 
     clause: Mapped["Clause"] = relationship(back_populates="checklist_items")
 
@@ -84,10 +80,8 @@ class CanonicalMap(Base):
 
 class OrgStatus(Base):
     __tablename__ = "org_status"
-    __table_args__ = (UniqueConstraint("org_id", "canonical_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     canonical_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("canonical_items.id", ondelete="CASCADE"))
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="not_started")
     jira_key: Mapped[str | None] = mapped_column(String(100))
@@ -96,11 +90,47 @@ class OrgStatus(Base):
     canonical_item: Mapped["CanonicalItem"] = relationship(back_populates="org_statuses")
 
 
-class Embedding(Base):
-    __tablename__ = "embeddings"
+class Law(Base):
+    __tablename__ = "laws"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    clause_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clauses.id", ondelete="CASCADE"), unique=True)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(4096))
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    version: Mapped[str] = mapped_column(String(50), nullable=False)
+    enacted_date: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    clause: Mapped["Clause"] = relationship(back_populates="embedding")
+    articles: Mapped[list["LawArticle"]] = relationship(back_populates="law", cascade="all, delete-orphan")
+
+
+class LawArticle(Base):
+    __tablename__ = "law_articles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    law_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("laws.id", ondelete="CASCADE"))
+    article_no: Mapped[str | None] = mapped_column(String(50))
+    article_text: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    law: Mapped["Law"] = relationship(back_populates="articles")
+    clause_refs: Mapped[list["ClauseLawRef"]] = relationship(back_populates="article", cascade="all, delete-orphan")
+
+
+class ClauseLawRef(Base):
+    __tablename__ = "clause_law_ref"
+
+    clause_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clauses.id", ondelete="CASCADE"), primary_key=True)
+    article_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("law_articles.id", ondelete="CASCADE"), primary_key=True)
+    match_method: Mapped[str] = mapped_column(String(50), nullable=False, default="regex")
+
+    clause: Mapped["Clause"] = relationship(back_populates="law_refs")
+    article: Mapped["LawArticle"] = relationship(back_populates="clause_refs")
+
+
+class Embedding(Base):
+    __tablename__ = "embeddings"
+    __table_args__ = (UniqueConstraint("source_type", "source_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 'clause' | 'law_article'
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(4096))

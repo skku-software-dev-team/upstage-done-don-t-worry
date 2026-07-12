@@ -10,5 +10,5 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 @router.post("/", response_model=ChatResponse)
 async def chat(body: ChatMessage, db: AsyncSession = Depends(get_db)):
-    answer, sources = await answer_with_rag(db, body.message, body.org_id)
+    answer, sources = await answer_with_rag(db, body.message, body.source_type)
     return ChatResponse(answer=answer, sources=sources)
