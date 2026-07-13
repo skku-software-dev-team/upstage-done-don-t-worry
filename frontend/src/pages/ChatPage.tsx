@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect } from "react";
-import { chatApi, type Clause } from "@/api/compliance";
+import { chatApi, type ChatSource } from "@/api/compliance";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
-  sources?: Clause[];
+  sources?: ChatSource[];
+}
+
+function sourceLabel(s: ChatSource): string {
+  return [s.doc_type, s.clause_no, s.title].filter(Boolean).join(" ") || s.id.slice(0, 8);
 }
 
 export default function ChatPage() {
@@ -75,7 +79,7 @@ export default function ChatPage() {
             </div>
             {m.sources && m.sources.length > 0 && (
               <div style={{ marginTop: "0.5rem", fontSize: "0.75rem", color: "#6b7280" }}>
-                참고: {m.sources.map((s) => s.clause_no ?? s.id.slice(0, 8)).join(", ")}
+                참고: {m.sources.map(sourceLabel).join(", ")}
               </div>
             )}
           </div>

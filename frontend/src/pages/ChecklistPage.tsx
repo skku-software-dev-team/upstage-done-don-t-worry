@@ -37,7 +37,7 @@ export default function ChecklistPage() {
   });
 
   const presentDocTypes = Array.from(
-    new Set(allItems.map((i) => i.doc_type).filter((d): d is string => !!d)),
+    new Set(allItems.flatMap((i) => i.documents.map((d) => d.doc_type))),
   ).sort((a, b) => a.localeCompare(b, "ko"));
 
   const presentCategories = Array.from(
@@ -51,7 +51,7 @@ export default function ChecklistPage() {
   const query = search.trim().toLowerCase();
   const items = allItems.filter(
     (i) =>
-      (docType === null || i.doc_type === docType) &&
+      (docType === null || i.documents.some((d) => d.doc_type === docType)) &&
       (categoryId === null || i.category_id === categoryId) &&
       (query === "" || i.merged_title.toLowerCase().includes(query)),
   );
@@ -108,7 +108,9 @@ export default function ChecklistPage() {
 
   const countForDoc = (dt: string | null) =>
     allItems.filter(
-      (i) => (dt === null || i.doc_type === dt) && (categoryId === null || i.category_id === categoryId),
+      (i) =>
+        (dt === null || i.documents.some((d) => d.doc_type === dt)) &&
+        (categoryId === null || i.category_id === categoryId),
     ).length;
   const countForCat = (cid: string | null) =>
     allItems.filter(
@@ -378,20 +380,25 @@ function ChecklistRow({
         {item.merged_title}
       </span>
 
-      {item.doc_type && (
-        <span
-          style={{
-            marginLeft: "auto",
-            padding: "0.15rem 0.55rem",
-            borderRadius: 4,
-            background: "#eef2ff",
-            color: "#4338ca",
-            fontSize: "0.7rem",
-            fontWeight: 600,
-            whiteSpace: "nowrap",
-          }}
-        >
-          {item.doc_type}
+      {item.documents.length > 0 && (
+        <span style={{ marginLeft: "auto", display: "flex", gap: "0.3rem" }}>
+          {item.documents.map((d) => (
+            <span
+              key={d.document_id}
+              title={d.document_name}
+              style={{
+                padding: "0.15rem 0.55rem",
+                borderRadius: 4,
+                background: "#eef2ff",
+                color: "#4338ca",
+                fontSize: "0.7rem",
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {d.doc_type}
+            </span>
+          ))}
         </span>
       )}
     </div>

@@ -2,7 +2,7 @@ import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -47,6 +47,23 @@ async def delete_document(doc_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     if not doc:
         raise HTTPException(404, "Document not found")
     await db.delete(doc)
+    await db.flush()  # apply cascade deletes (clauses, canonical_map) before the cleanup query below
+
+    # Deleting a document cascades to its clauses and canonical_map rows, but
+    # CanonicalItem itself isn't cascade-deleted — if this was the last clause
+    # mapped to a canonical item, that item would otherwise be left behind as
+    # an orphan (never shown as deletable, but still counted/re-duplicated on
+    # the next upload).
+    orphaned_ids = (
+        await db.execute(
+            select(CanonicalItem.id)
+            .outerjoin(CanonicalMap, CanonicalMap.canonical_id == CanonicalItem.id)
+            .where(CanonicalMap.canonical_id.is_(None))
+        )
+    ).scalars().all()
+    if orphaned_ids:
+        await db.execute(delete(CanonicalItem).where(CanonicalItem.id.in_(orphaned_ids)))
+
     await db.commit()
 
 
@@ -73,6 +90,9 @@ async def upload_and_parse(
     md = (parsed.get("content") or {}).get("markdown", "").strip()
     if not md:
         md = (parsed.get("content") or {}).get("text", "").strip()
+
+    with open(f"/tmp/raw_parse_{doc_id}.md", "w", encoding="utf-8") as _debug_f:
+        _debug_f.write(md)
 
     raw_clauses = _segment_document(md)
 
@@ -218,13 +238,26 @@ def _segment_document(md: str) -> list[dict]:
     # (a) clause tables: a markdown table row whose first cell is "항목" / "항 목"
     #     starts a new clause. Everything up to the next such row (or next
     #     top-level heading) belongs to this clause.
+    #
+    # Only capture the FIRST cell after the label (up to the next "|"), not
+    # the rest of the line — some documents (e.g. control-mapping tables with
+    # per-service-model applicability columns like "IaaS | SaaS | ○ | | ○")
+    # have several more columns on the same "항목" row, and capturing to
+    # end-of-line would pull all of that into the title.
     clause_table_start = _re.compile(
-        r'^\|\s*항\s*목\s*\|\s*(?P<body>.+?)\s*\|\s*$', _re.MULTILINE
+        r'^\|\s*항\s*목\s*\|\s*(?P<body>[^|\n]+?)\s*\|', _re.MULTILINE
     )
     table_matches = list(clause_table_start.finditer(md))
 
+    # Parsing artifacts that occasionally get captured as if they were real
+    # 인증기준/주요확인사항 content: a leaked markdown table separator row
+    # ("| --- | --- |", from a table nested inside the cell) or an image
+    # placeholder the parser couldn't turn into text.
+    junk_content_pattern = _re.compile(r'!\[image\]\(|\|\s*-{2,}\s*(\||$)')
+
     if len(table_matches) >= 5:
         raw: list[dict] = []
+        seen: set[tuple[str, str]] = set()
         for i, m in enumerate(table_matches):
             header_cell = m.group("body").strip()
             code_match = _re.match(r'([\d.]+)\s*(.*)', header_cell)
@@ -241,12 +274,20 @@ def _segment_document(md: str) -> list[dict]:
 
             # Fold the checklist questions into requirement text if 인증기준 itself
             # is empty (some docs only have 주요확인사항, e.g. CSAP variants)
-            body_text = requirement or checklist_raw or ""
+            body_text = (requirement or checklist_raw or "").strip()
+
+            if body_text and junk_content_pattern.search(body_text):
+                continue
+
+            dedup_key = (title, body_text)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
 
             raw.append({
                 "title": title[:255] or f"조항 {i + 1}",
                 "clause_no": clause_no,
-                "requirement": body_text.strip() or None,
+                "requirement": body_text or None,
                 "related_laws_raw": related_laws,
             })
         return raw
@@ -296,10 +337,15 @@ def _extract_table_field(block: str, field_label_pattern: str) -> str | None:
     text). The value runs until the start of the next row (a line beginning with
     a single "|") rather than until the current line closes with "|", so wrapped
     lines don't get truncated and don't bleed into the next field.
+
+    Uses [ \\t]* (not \\s*) right before the value group — \\s* would swallow the
+    newline after the label cell, which shifts where capture starts and makes
+    the "next line starts with |" boundary check fire one row too late,
+    letting an entire adjacent row (e.g. a nested table's header) leak in.
     """
     import re as _re
     m = _re.search(
-        rf'^\|\s*{field_label_pattern}\s*\|\s*(?P<val>.*?)(?=\n\|(?!\|)|\Z)',
+        rf'^\|\s*{field_label_pattern}\s*\|[ \t]*(?P<val>.*?)(?=\n\|(?!\|)|\Z)',
         block,
         _re.MULTILINE | _re.DOTALL,
     )

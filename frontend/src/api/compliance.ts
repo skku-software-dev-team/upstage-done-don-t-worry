@@ -30,14 +30,18 @@ export interface Category {
   name: string;
 }
 
+export interface ChecklistDocRef {
+  document_id: string;
+  doc_type: string;
+  document_name: string;
+}
+
 export interface ChecklistItemDetail {
   id: string;
   merged_title: string;
   category_id: string | null;
   category_name: string | null;
-  document_id: string | null;
-  doc_type: string | null;
-  document_name: string | null;
+  documents: ChecklistDocRef[];
 }
 
 export interface OrgStatus {
@@ -49,9 +53,17 @@ export interface OrgStatus {
   updated_at: string;
 }
 
+export interface ChatSource {
+  id: string;
+  clause_no: string | null;
+  title: string | null;
+  document_name: string | null;
+  doc_type: string | null;
+}
+
 export interface ChatResponse {
   answer: string;
-  sources: Clause[];
+  sources: ChatSource[];
 }
 
 export interface UploadResult {
