@@ -140,35 +140,62 @@ async def parse_document(file_bytes: bytes, filename: str) -> dict:
 async def generate_checklist_items(
     clause_summaries: list[dict],  # [{"title": str, "requirement": str}]
     categories: list[str],
+    candidates_by_clause: dict[int, list[dict]] | None = None,  # {clause_index (0-based): [{"id","title","category"}, ...]}
 ) -> list[dict]:
-    """Call Solar once for the whole document and return checklist items with categories.
-    Returns [{"title": str, "category": str}, ...]
+    """Call Solar to turn EVERY clause into exactly one checklist item, classified
+    into one of `categories`. `candidates_by_clause` carries, per clause, a short
+    list of existing canonical items shortlisted by embedding similarity (see
+    rag.find_similar_canonical_items) — Solar only has to confirm or reject those
+    few candidates instead of scanning the entire existing checklist, which keeps
+    the prompt small and the duplicate check accurate regardless of how many
+    documents have been uploaded so far.
+
+    Returns [{"title": str, "category": str, "source": int, "matches_existing_id": str | None}, ...]
     """
-    summaries_text = "\n".join(
-        f"[{i + 1}] {c.get('title') or '(제목없음)'}: {(c.get('requirement') or '')[:400]}"
-        for i, c in enumerate(clause_summaries[:40])
-    )
+    if not clause_summaries:
+        return []
+
+    candidates_by_clause = candidates_by_clause or {}
+
+    lines: list[str] = []
+    for i, c in enumerate(clause_summaries):
+        lines.append(f"[{i + 1}] {c.get('title') or '(제목없음)'}: {(c.get('requirement') or '')[:400]}")
+        candidates = candidates_by_clause.get(i)
+        if candidates:
+            cand_text = ", ".join(
+                f"id={cand['id']} ({cand['category']} | {cand['title']})" for cand in candidates
+            )
+            lines.append(f"    → 기존 유사 항목 후보: {cand_text}")
+    summaries_text = "\n".join(lines)
     categories_text = "\n".join(f"- {cat}" for cat in categories)
 
     prompt = f"""당신은 정보보호 인증 전문가입니다.
 다음은 업로드된 보안 문서의 조항 목록입니다. 각 조항 앞의 [번호]를 참고하세요.
-이 문서를 기반으로 조직이 수행해야 할 체크리스트 항목을 20개 이내로 생성해주세요.
+일부 조항 아래에는 "→ 기존 유사 항목 후보"로 이미 다른 문서에서 생성된 체크리스트
+항목 중 임베딩 유사도로 찾은 후보가 표시되어 있습니다.
 
-조항 목록:
+조항 목록 (총 {len(clause_summaries)}개):
 {summaries_text}
 
 # 카테고리 (아래 목록에서만 선택)
 {categories_text}
 
 중요 규칙:
+- **각 조항([번호]) 하나당 체크리스트 항목을 정확히 하나씩 생성하세요.**
+  조항 개수와 결과 items 개수가 같아야 합니다. 여러 조항을 하나로 뭉치거나 요약하지 마세요.
+- "기존 유사 항목 후보"가 표시된 조항은 그 후보들과 실제로 같은 요구사항인지 비교하세요.
+  같으면 matches_existing_id에 그 후보의 id를 그대로 반환하고, 다르거나 후보가 없으면
+  matches_existing_id를 null로 두세요.
 - category 값은 위 목록의 이름을 **글자 그대로, 띄어쓰기까지 정확히** 복사하세요.
   (예: "물리보안"이 아니라 "물리적 보안", "인적보안"이 아니라 "인적 보안")
 - 목록에 없는 새로운 카테고리 이름을 만들지 마세요.
-- 여러 카테고리에 항목을 골고루 분류하세요.
+- 공공기관/특정 클라우드 서비스 유형(IaaS/SaaS/DaaS) 특화 조항은 관련 카테고리가
+  있다면 그쪽으로, 없다면 가장 근접한 카테고리로 분류하되 다른 일반 항목과 억지로
+  섞지 마세요.
 - 각 항목마다 근거가 된 조항의 [번호]를 source에 넣으세요.
 
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요:
-{{"items": [{{"title": "항목명", "category": "카테고리명", "source": 조항번호}}, ...]}}"""
+{{"items": [{{"title": "항목명", "category": "카테고리명", "source": 조항번호, "matches_existing_id": "기존id 또는 null"}}, ...]}}"""
 
     raw = await chat_completion([{"role": "user", "content": prompt}])
     match = re.search(r'\{.*\}', raw, re.DOTALL)
