@@ -8,6 +8,9 @@ export default defineConfig({
     alias: { "@": path.resolve(__dirname, "./src") },
   },
   server: {
+    watch: {
+      usePolling: true,
+    },
     proxy: {
       "/api": {
         target: process.env.VITE_API_BASE_URL || "http://backend:8000",

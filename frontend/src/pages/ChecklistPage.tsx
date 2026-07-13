@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { checklistApi, type OrgStatus } from "@/api/compliance";
+import { checklistApi, type ChecklistItemDetail, type OrgStatus } from "@/api/compliance";
 
 const DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -14,31 +14,32 @@ const statusLabel: Record<Status, string> = {
   not_applicable: "해당없음",
 };
 
-const statusColor: Record<Status, string> = {
-  not_started: "#e5e7eb",
-  in_progress: "#fef08a",
-  completed: "#bbf7d0",
-  not_applicable: "#f3f4f6",
-};
+const UNCATEGORIZED_ID = "__uncategorized__";
+
+interface CategoryGroup {
+  id: string;
+  name: string;
+  items: ChecklistItemDetail[];
+}
 
 export default function ChecklistPage() {
   const qc = useQueryClient();
   const [orgId] = useState(DEFAULT_ORG_ID);
   const [docType, setDocType] = useState<string | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [openStatusFor, setOpenStatusFor] = useState<string | null>(null);
 
-  // Fetch all items once; derive chips + filter client-side (small list)
   const { data: allItems = [] } = useQuery({
     queryKey: ["checklist-items"],
     queryFn: () => checklistApi.list(),
   });
 
-  // Distinct document types present in the items (e.g. ISMS-P, CSAP)
   const presentDocTypes = Array.from(
     new Set(allItems.map((i) => i.doc_type).filter((d): d is string => !!d)),
   ).sort((a, b) => a.localeCompare(b, "ko"));
 
-  // Only categories that actually have items become filter chips
   const presentCategories = Array.from(
     new Map(
       allItems
@@ -47,11 +48,12 @@ export default function ChecklistPage() {
     ).entries(),
   ).sort((a, b) => a[1].localeCompare(b[1], "ko"));
 
-  // Client-side filter by doc type and/or category
+  const query = search.trim().toLowerCase();
   const items = allItems.filter(
     (i) =>
       (docType === null || i.doc_type === docType) &&
-      (categoryId === null || i.category_id === categoryId),
+      (categoryId === null || i.category_id === categoryId) &&
+      (query === "" || i.merged_title.toLowerCase().includes(query)),
   );
 
   const { data: statuses = [] } = useQuery({
@@ -60,6 +62,8 @@ export default function ChecklistPage() {
   });
 
   const statusMap = new Map<string, OrgStatus>(statuses.map((s) => [s.canonical_id, s]));
+  const statusOf = (item: ChecklistItemDetail): Status =>
+    (statusMap.get(item.id)?.status as Status) ?? "not_started";
 
   const { mutate: updateStatus } = useMutation({
     mutationFn: ({ canonicalId, status }: { canonicalId: string; status: Status }) =>
@@ -79,7 +83,29 @@ export default function ChecklistPage() {
     transition: "all 0.15s",
   });
 
-  // Count helper respecting the *other* active filter
+  const groups: CategoryGroup[] = [];
+  const groupById = new Map<string, CategoryGroup>();
+  for (const item of items) {
+    const id = item.category_id ?? UNCATEGORIZED_ID;
+    const name = item.category_name ?? "미분류";
+    let group = groupById.get(id);
+    if (!group) {
+      group = { id, name, items: [] };
+      groupById.set(id, group);
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  groups.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+
+  const toggleCollapse = (id: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   const countForDoc = (dt: string | null) =>
     allItems.filter(
       (i) => (dt === null || i.doc_type === dt) && (categoryId === null || i.category_id === categoryId),
@@ -90,10 +116,25 @@ export default function ChecklistPage() {
     ).length;
 
   return (
-    <div style={{ padding: "2rem", maxWidth: 1000, margin: "0 auto" }}>
+    <div style={{ padding: "2rem", maxWidth: 720, margin: "0 auto" }}>
       <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "1rem" }}>체크리스트</h1>
 
-      {/* Document (framework) filter — ISMS-P, CSAP, ... */}
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="항목 검색..."
+        style={{
+          width: "100%",
+          padding: "0.55rem 0.9rem",
+          borderRadius: 8,
+          border: "1px solid #d1d5db",
+          fontSize: "0.88rem",
+          marginBottom: "1.25rem",
+          boxSizing: "border-box",
+        }}
+      />
+
       {presentDocTypes.length > 0 && (
         <div style={{ marginBottom: "0.75rem" }}>
           <div style={{ fontSize: "0.72rem", color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
@@ -112,7 +153,6 @@ export default function ChecklistPage() {
         </div>
       )}
 
-      {/* Category filter — only categories that have items */}
       {presentCategories.length > 0 && (
         <div style={{ marginBottom: "1.5rem" }}>
           <div style={{ fontSize: "0.72rem", color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
@@ -138,94 +178,221 @@ export default function ChecklistPage() {
         </div>
       )}
 
-      {items.length === 0 ? (
+      {groups.length === 0 ? (
         <p style={{ color: "#6b7280" }}>
           {allItems.length === 0
             ? "항목이 없습니다. 문서를 먼저 업로드하세요."
             : "선택한 필터에 해당하는 항목이 없습니다."}
         </p>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.88rem" }}>
-          <thead>
-            <tr style={{ borderBottom: "2px solid #e5e7eb", textAlign: "left", color: "#6b7280" }}>
-              <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>항목</th>
-              <th style={{ padding: "0.75rem 1rem", fontWeight: 600, width: 130 }}>문서</th>
-              <th style={{ padding: "0.75rem 1rem", fontWeight: 600, width: 150 }}>카테고리</th>
-              <th style={{ padding: "0.75rem 1rem", fontWeight: 600, width: 130 }}>상태</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item) => {
-              const cur = statusMap.get(item.id);
-              const curStatus: Status = (cur?.status as Status) ?? "not_started";
-              return (
-                <tr key={item.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                  <td style={{ padding: "0.75rem 1rem", color: "#111827" }}>{item.merged_title}</td>
-                  <td style={{ padding: "0.75rem 1rem" }}>
-                    {item.doc_type ? (
-                      <span
-                        title={item.document_name ?? ""}
-                        style={{
-                          padding: "0.2rem 0.6rem",
-                          borderRadius: 4,
-                          background: "#eef2ff",
-                          color: "#4338ca",
-                          fontSize: "0.75rem",
-                          fontWeight: 600,
-                          whiteSpace: "nowrap",
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {groups.map((group) => {
+            const isCollapsed = collapsed.has(group.id);
+            const applicableItems = group.items.filter((i) => statusOf(i) !== "not_applicable");
+            const doneCount = applicableItems.filter((i) => statusOf(i) === "completed").length;
+            const isAllDone = applicableItems.length > 0 && doneCount === applicableItems.length;
+            return (
+              <div
+                key={group.id}
+                style={{
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 10,
+                  background: "white",
+                  overflow: "visible",
+                }}
+              >
+                <button
+                  onClick={() => toggleCollapse(group.id)}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "0.9rem 1.1rem",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span style={{ color: "#9ca3af", fontSize: "0.8rem" }}>
+                      {isCollapsed ? "›" : "⌄"}
+                    </span>
+                    <span style={{ fontWeight: 600, color: "#111827" }}>{group.name}</span>
+                  </span>
+                  <span
+                    style={
+                      isAllDone
+                        ? {
+                            fontSize: "0.8rem",
+                            fontWeight: 600,
+                            color: "white",
+                            background: "#16a34a",
+                            padding: "0.25rem 0.75rem",
+                            borderRadius: 999,
+                          }
+                        : { fontSize: "0.8rem", color: "#6b7280" }
+                    }
+                  >
+                    {doneCount}/{applicableItems.length} 완료
+                  </span>
+                </button>
+
+                {!isCollapsed && (
+                  <div style={{ padding: "0 1.1rem 0.75rem" }}>
+                    {group.items.map((item) => (
+                      <ChecklistRow
+                        key={item.id}
+                        item={item}
+                        status={statusOf(item)}
+                        isOpen={openStatusFor === item.id}
+                        onToggleOpen={() =>
+                          setOpenStatusFor(openStatusFor === item.id ? null : item.id)
+                        }
+                        onSelect={(status) => {
+                          updateStatus({ canonicalId: item.id, status });
+                          setOpenStatusFor(null);
                         }}
-                      >
-                        {item.doc_type}
-                      </span>
-                    ) : (
-                      <span style={{ color: "#9ca3af", fontSize: "0.8rem" }}>-</span>
-                    )}
-                  </td>
-                  <td style={{ padding: "0.75rem 1rem" }}>
-                    {item.category_name ? (
-                      <span
-                        style={{
-                          padding: "0.2rem 0.6rem",
-                          borderRadius: 4,
-                          background: "#ecfdf5",
-                          color: "#047857",
-                          fontSize: "0.75rem",
-                          fontWeight: 600,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {item.category_name}
-                      </span>
-                    ) : (
-                      <span style={{ color: "#9ca3af", fontSize: "0.8rem" }}>미분류</span>
-                    )}
-                  </td>
-                  <td style={{ padding: "0.75rem 1rem" }}>
-                    <select
-                      value={curStatus}
-                      onChange={(e) =>
-                        updateStatus({ canonicalId: item.id, status: e.target.value as Status })
-                      }
-                      style={{
-                        padding: "0.25rem 0.5rem",
-                        borderRadius: 4,
-                        border: "1px solid #d1d5db",
-                        background: statusColor[curStatus],
-                        cursor: "pointer",
-                      }}
-                    >
-                      {STATUS_OPTIONS.map((s) => (
-                        <option key={s} value={s}>
-                          {statusLabel[s]}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function checkboxGlyph(status: Status) {
+  if (status === "completed") return "✓";
+  if (status === "not_applicable") return "–";
+  if (status === "in_progress") return "●";
+  return "";
+}
+
+function checkboxStyle(status: Status): React.CSSProperties {
+  const palette: Record<Status, { border: string; bg: string; fg: string }> = {
+    completed: { border: "#16a34a", bg: "#16a34a", fg: "white" },
+    in_progress: { border: "#ca8a04", bg: "white", fg: "#ca8a04" },
+    not_applicable: { border: "#d1d5db", bg: "#f3f4f6", fg: "#9ca3af" },
+    not_started: { border: "#d1d5db", bg: "white", fg: "white" },
+  };
+  const c = palette[status];
+  return {
+    width: 20,
+    height: 20,
+    minWidth: 20,
+    borderRadius: 5,
+    border: `1.5px solid ${c.border}`,
+    background: c.bg,
+    color: c.fg,
+    fontSize: "0.75rem",
+    fontWeight: 700,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    padding: 0,
+    flexShrink: 0,
+  };
+}
+
+function ChecklistRow({
+  item,
+  status,
+  isOpen,
+  onToggleOpen,
+  onSelect,
+}: {
+  item: ChecklistItemDetail;
+  status: Status;
+  isOpen: boolean;
+  onToggleOpen: () => void;
+  onSelect: (status: Status) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.65rem",
+        padding: "0.65rem 0",
+        borderBottom: "1px solid #f3f4f6",
+      }}
+    >
+      <div style={{ position: "relative" }}>
+        <button onClick={onToggleOpen} style={checkboxStyle(status)}>
+          {checkboxGlyph(status)}
+        </button>
+
+        {isOpen && (
+          <>
+            <div onClick={onToggleOpen} style={{ position: "fixed", inset: 0, zIndex: 20 }} />
+            <div
+              style={{
+                position: "absolute",
+                top: "calc(100% + 4px)",
+                left: 0,
+                zIndex: 21,
+                background: "white",
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                minWidth: 110,
+                overflow: "hidden",
+              }}
+            >
+              {STATUS_OPTIONS.map((s) => (
+                <div
+                  key={s}
+                  onClick={() => onSelect(s)}
+                  style={{
+                    padding: "0.5rem 0.8rem",
+                    fontSize: "0.82rem",
+                    fontWeight: s === status ? 700 : 400,
+                    color: s === status ? "#111827" : "#4b5563",
+                    background: s === status ? "#f3f4f6" : "white",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {statusLabel[s]}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      <span
+        style={{
+          fontSize: "0.9rem",
+          color: status === "completed" ? "#9ca3af" : "#111827",
+          textDecoration: status === "completed" ? "line-through" : "none",
+        }}
+      >
+        {item.merged_title}
+      </span>
+
+      {item.doc_type && (
+        <span
+          style={{
+            marginLeft: "auto",
+            padding: "0.15rem 0.55rem",
+            borderRadius: 4,
+            background: "#eef2ff",
+            color: "#4338ca",
+            fontSize: "0.7rem",
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {item.doc_type}
+        </span>
       )}
     </div>
   );
