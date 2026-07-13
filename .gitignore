@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 node_modules/
 dist/
+*.tsbuildinfo
 .DS_Store
 *.egg-info/
 # fixtures.sql은 팀 공유용으로 커밋 대상 (ignore 안 함)
