@@ -3,10 +3,15 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.compliance import Clause, Embedding, LawArticle
+from app.models.compliance import CanonicalItem, CanonicalMap, Category, Clause, Embedding, LawArticle
 from app.services.upstage import chat_completion, embed_text
 
 SourceType = Literal["clause", "law_article", "all"]
+
+# Cosine distance threshold for cross-document duplicate candidates.
+# Lower = stricter. 0.35 (~0.65 cosine similarity) is a starting point —
+# tune based on false positive/negative rate once tested against real data.
+DUPLICATE_CANDIDATE_MAX_DISTANCE = 0.35
 
 
 async def search_similar_clauses(
@@ -44,6 +49,48 @@ async def search_similar_articles(
         .limit(top_k)
     )
     return list(result.scalars().all())
+
+
+async def find_similar_canonical_items(
+    db: AsyncSession,
+    query_vec: list[float],
+    top_k: int = 3,
+    max_distance: float = DUPLICATE_CANDIDATE_MAX_DISTANCE,
+) -> list[dict]:
+    """Shortlist existing canonical items that might be duplicates of a new
+    clause, by comparing the new clause's embedding against the embeddings of
+    clauses already linked to each canonical item via canonical_map.
+
+    Returns compact dicts (id/title/category) meant to be shown to Solar as
+    candidates, instead of the full canonical_items list.
+    """
+    distance = Embedding.embedding.cosine_distance(query_vec)
+    stmt = (
+        select(
+            CanonicalItem.id,
+            CanonicalItem.merged_title,
+            Category.name.label("category_name"),
+            distance.label("distance"),
+        )
+        .join(CanonicalMap, CanonicalMap.canonical_id == CanonicalItem.id)
+        .join(Embedding, (Embedding.source_id == CanonicalMap.clause_id) & (Embedding.source_type == "clause"))
+        .outerjoin(Category, Category.id == CanonicalItem.category_id)
+        .where(distance < max_distance)
+        .order_by(distance)
+        .limit(top_k * 3)  # over-fetch, then dedupe by canonical id below
+    )
+    result = await db.execute(stmt)
+
+    seen: set = set()
+    candidates: list[dict] = []
+    for row in result.all():
+        if row.id in seen:
+            continue
+        seen.add(row.id)
+        candidates.append({"id": str(row.id), "title": row.merged_title, "category": row.category_name or ""})
+        if len(candidates) >= top_k:
+            break
+    return candidates
 
 
 async def answer_with_rag(
