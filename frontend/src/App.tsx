@@ -1,7 +1,9 @@
 import { Routes, Route, NavLink } from "react-router-dom";
 import DocumentsPage from "@/pages/DocumentsPage";
+import LawsPage from "@/pages/LawsPage";
 import ChecklistPage from "@/pages/ChecklistPage";
 import ChatPage from "@/pages/ChatPage";
+import { ChatProvider } from "@/context/ChatContext";
 
 const navStyle = (isActive: boolean): React.CSSProperties => ({
   padding: "0.5rem 1rem",
@@ -37,6 +39,9 @@ export default function App() {
         <NavLink to="/" end style={({ isActive }) => navStyle(isActive)}>
           문서
         </NavLink>
+        <NavLink to="/laws" style={({ isActive }) => navStyle(isActive)}>
+          법령
+        </NavLink>
         <NavLink to="/checklist" style={({ isActive }) => navStyle(isActive)}>
           체크리스트
         </NavLink>
@@ -46,11 +51,14 @@ export default function App() {
       </header>
 
       <main>
-        <Routes>
-          <Route path="/" element={<DocumentsPage />} />
-          <Route path="/checklist" element={<ChecklistPage />} />
-          <Route path="/chat" element={<ChatPage />} />
-        </Routes>
+        <ChatProvider>
+          <Routes>
+            <Route path="/" element={<DocumentsPage />} />
+            <Route path="/laws" element={<LawsPage />} />
+            <Route path="/checklist" element={<ChecklistPage />} />
+            <Route path="/chat" element={<ChatPage />} />
+          </Routes>
+        </ChatProvider>
       </main>
     </div>
   );

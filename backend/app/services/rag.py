@@ -2,6 +2,7 @@ from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.compliance import CanonicalItem, CanonicalMap, Category, Clause, Embedding, LawArticle
 from app.services.upstage import chat_completion, embed_text
@@ -24,6 +25,7 @@ async def search_similar_clauses(
 
     stmt = (
         select(Clause)
+        .options(selectinload(Clause.document))
         .join(Embedding, (Embedding.source_id == Clause.id) & (Embedding.source_type == "clause"))
         .order_by(Embedding.embedding.cosine_distance(query_vec))
         .limit(top_k)
@@ -44,6 +46,7 @@ async def search_similar_articles(
 
     result = await db.execute(
         select(LawArticle)
+        .options(selectinload(LawArticle.law))
         .join(Embedding, (Embedding.source_id == LawArticle.id) & (Embedding.source_type == "law_article"))
         .order_by(Embedding.embedding.cosine_distance(query_vec))
         .limit(top_k)
@@ -104,13 +107,17 @@ async def answer_with_rag(
     if source_type in ("clause", "all"):
         clauses = await search_similar_clauses(db, question, source_type="clause")
         context_parts.extend(
-            f"[조항 {c.clause_no}] {c.requirement}" for c in clauses if c.requirement
+            f"[{c.document.doc_type if c.document else '문서'} {c.clause_no}] {c.requirement}"
+            for c in clauses
+            if c.requirement
         )
 
     if source_type in ("law_article", "all"):
         articles = await search_similar_articles(db, question)
         context_parts.extend(
-            f"[법조문 {a.article_no}] {a.article_text}" for a in articles if a.article_text
+            f"[{a.law.name if a.law else '법률'} {a.article_no}] {a.article_text}"
+            for a in articles
+            if a.article_text
         )
 
     answer = await chat_completion(
