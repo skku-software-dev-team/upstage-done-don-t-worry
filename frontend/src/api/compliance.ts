@@ -30,14 +30,18 @@ export interface Category {
   name: string;
 }
 
+export interface ChecklistDocRef {
+  document_id: string;
+  doc_type: string;
+  document_name: string;
+}
+
 export interface ChecklistItemDetail {
   id: string;
   merged_title: string;
   category_id: string | null;
   category_name: string | null;
-  document_id: string | null;
-  doc_type: string | null;
-  document_name: string | null;
+  documents: ChecklistDocRef[];
 }
 
 export interface OrgStatus {
@@ -66,15 +70,44 @@ export interface JiraConnectInput {
   jira_project_key: string;
 }
 
+export interface ChatSource {
+  id: string;
+  clause_no: string | null;
+  title: string | null;
+  document_name: string | null;
+  doc_type: string | null;
+}
+
 export interface ChatResponse {
   answer: string;
-  sources: Clause[];
+  sources: ChatSource[];
 }
 
 export interface UploadResult {
   message: string;
   clauses: number;
   checklist_items: number;
+  linked_laws?: number;
+}
+
+export interface Law {
+  id: string;
+  name: string;
+  version: string;
+  enacted_date: string | null;
+}
+
+export interface LawArticle {
+  id: string;
+  law_id: string;
+  article_no: string | null;
+  article_text: string | null;
+}
+
+export interface LawUploadResult {
+  message: string;
+  articles: number;
+  linked_clauses: number;
 }
 
 export const documentsApi = {
@@ -123,6 +156,21 @@ export const orgApi = {
     client.get<Organization>(`/org/${orgId}`).then((r) => r.data),
   connectJira: (orgId: string, data: JiraConnectInput) =>
     client.put<Organization>(`/org/${orgId}/jira`, data).then((r) => r.data),
+};
+
+export const lawsApi = {
+  list: () => client.get<Law[]>("/laws").then((r) => r.data),
+  create: (data: Pick<Law, "name" | "version" | "enacted_date">) =>
+    client.post<Law>("/laws", data).then((r) => r.data),
+  delete: (lawId: string) => client.delete(`/laws/${lawId}`),
+  articles: (lawId: string) =>
+    client.get<LawArticle[]>(`/laws/${lawId}/articles`).then((r) => r.data),
+  upload: (lawId: string, formData: FormData) =>
+    client
+      .post<LawUploadResult>(`/laws/${lawId}/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      .then((r) => r.data),
 };
 
 export const chatApi = {

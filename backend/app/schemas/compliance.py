@@ -63,15 +63,23 @@ class CanonicalItemRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ChecklistDocRef(BaseModel):
+    document_id: uuid.UUID
+    doc_type: str
+    document_name: str
+
+
 class ChecklistItemDetail(BaseModel):
-    """Enriched checklist item: canonical item + category + source document."""
+    """Enriched checklist item: canonical item + category + source document(s).
+
+    A single item can list multiple documents when cross-document duplicate
+    detection merged clauses from more than one source (e.g. the same
+    requirement appearing in both ISMS-P and CSAP)."""
     id: uuid.UUID
     merged_title: str
     category_id: uuid.UUID | None
     category_name: str | None
-    document_id: uuid.UUID | None
-    doc_type: str | None
-    document_name: str | None
+    documents: list[ChecklistDocRef]
 
 
 class OrgStatusRead(BaseModel):
@@ -108,6 +116,12 @@ class OrganizationJiraUpdate(BaseModel):
 
 
 # Laws
+class LawCreate(BaseModel):
+    name: str
+    version: str
+    enacted_date: date | None = None
+
+
 class LawRead(BaseModel):
     id: uuid.UUID
     name: str
@@ -140,6 +154,14 @@ class ChatMessage(BaseModel):
     source_type: Literal["clause", "law_article", "all"] = "all"
 
 
+class ChatSource(BaseModel):
+    id: uuid.UUID
+    clause_no: str | None
+    title: str | None
+    document_name: str | None
+    doc_type: str | None
+
+
 class ChatResponse(BaseModel):
     answer: str
-    sources: list[ClauseRead] = []
+    sources: list[ChatSource] = []

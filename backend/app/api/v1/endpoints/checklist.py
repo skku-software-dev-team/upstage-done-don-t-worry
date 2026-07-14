@@ -18,6 +18,7 @@ from app.models.compliance import (
 from app.services import jira
 from app.schemas.compliance import (
     CategoryRead,
+    ChecklistDocRef,
     ChecklistItemDetail,
     OrgStatusRead,
     OrgStatusUpdate,
@@ -63,18 +64,34 @@ async def list_canonical_items(
         stmt = stmt.where(Clause.document_id == document_id)
 
     result = await db.execute(stmt)
-    return [
-        ChecklistItemDetail(
-            id=row.id,
-            merged_title=row.merged_title,
-            category_id=row.category_id,
-            category_name=row.category_name,
-            document_id=row.document_id,
-            doc_type=row.doc_type,
-            document_name=row.document_name,
-        )
-        for row in result.all()
-    ]
+
+    # One canonical item can map to clauses in multiple documents (cross-doc
+    # duplicate merge) — collapse those into a single row with multiple
+    # document badges instead of repeating the row once per clause mapping.
+    items: dict[uuid.UUID, ChecklistItemDetail] = {}
+    for row in result.all():
+        item = items.get(row.id)
+        if item is None:
+            item = ChecklistItemDetail(
+                id=row.id,
+                merged_title=row.merged_title,
+                category_id=row.category_id,
+                category_name=row.category_name,
+                documents=[],
+            )
+            items[row.id] = item
+        if row.document_id is not None and not any(
+            d.document_id == row.document_id for d in item.documents
+        ):
+            item.documents.append(
+                ChecklistDocRef(
+                    document_id=row.document_id,
+                    doc_type=row.doc_type,
+                    document_name=row.document_name,
+                )
+            )
+
+    return list(items.values())
 
 
 @router.get("/org/{org_id}", response_model=list[OrgStatusRead])

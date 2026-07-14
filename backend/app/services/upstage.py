@@ -36,13 +36,25 @@ async def embed_text(text: str, is_query: bool = False) -> list[float]:
 
 
 async def chat_completion(messages: list[dict], context: str = "") -> str:
-    system_prompt = (
-        "당신은 정보보호 인증(ISMS-P, CSAP, ISO27001) 전문 어시스턴트입니다. "
-        "주어진 조항 내용을 바탕으로 정확하고 구체적으로 답변하세요.\n\n"
-        f"참고 조항:\n{context}"
-        if context
-        else "당신은 정보보호 인증 전문 어시스턴트입니다."
-    )
+    if context:
+        system_prompt = (
+            "당신은 정보보호 인증(ISMS-P, CSAP, ISO27001) 전문 어시스턴트입니다. "
+            "반드시 아래 '참고 조항'에 있는 내용만을 근거로 답변하세요. "
+            "참고 조항에 없는 인증기준, 해외 법령, 일반 상식은 언급하지 마세요. "
+            "참고 조항만으로 답할 수 없으면 모른다고 답하고, 어떤 문서를 추가로 "
+            "업로드하면 좋을지 안내하세요. "
+            "참고 조항은 각각 [문서명 조항번호] 형식으로 시작합니다 — 답변에서 이 내용을 "
+            "언급할 때마다 어느 문서의 몇 번 조항인지 그 표기를 그대로 살려서 "
+            "예: '[ISMS-P 2.4.1]에 따르면...' 처럼 문장 안에 명시하세요. "
+            "출처가 불명확한 조항번호만 단독으로 쓰지 마세요.\n\n"
+            f"참고 조항:\n{context}"
+        )
+    else:
+        system_prompt = (
+            "당신은 정보보호 인증 전문 어시스턴트입니다. "
+            "현재 업로드된 문서에서 관련 내용을 찾지 못했습니다. "
+            "일반 지식으로 답변하지 말고, 관련 인증기준 문서를 먼저 업로드해달라고 안내하세요."
+        )
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
