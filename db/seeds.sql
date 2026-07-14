@@ -15,3 +15,8 @@ INSERT INTO categories (name) VALUES
     ('위험 관리'),
     ('보안 정책 및 조직')
 ON CONFLICT (name) DO NOTHING;
+
+-- 기본 조직 (프론트엔드 DEFAULT_ORG_ID와 동일)
+INSERT INTO organizations (id, name) VALUES
+    ('00000000-0000-0000-0000-000000000001', 'Default Organization')
+ON CONFLICT (id) DO NOTHING;

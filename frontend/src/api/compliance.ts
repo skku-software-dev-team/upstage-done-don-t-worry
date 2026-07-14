@@ -53,6 +53,23 @@ export interface OrgStatus {
   updated_at: string;
 }
 
+export interface Organization {
+  id: string;
+  name: string;
+  jira_base_url: string | null;
+  jira_email: string | null;
+  jira_project_key: string | null;
+  jira_connected: boolean;
+  updated_at: string;
+}
+
+export interface JiraConnectInput {
+  jira_base_url: string;
+  jira_email: string;
+  jira_api_token: string;
+  jira_project_key: string;
+}
+
 export interface ChatSource {
   id: string;
   clause_no: string | null;
@@ -128,6 +145,17 @@ export const checklistApi = {
         jira_key: jiraKey,
       })
       .then((r) => r.data),
+  syncJira: (orgId: string) =>
+    client
+      .post<{ synced: number; updated: number }>(`/checklist/org/${orgId}/jira/sync`)
+      .then((r) => r.data),
+};
+
+export const orgApi = {
+  get: (orgId: string) =>
+    client.get<Organization>(`/org/${orgId}`).then((r) => r.data),
+  connectJira: (orgId: string, data: JiraConnectInput) =>
+    client.put<Organization>(`/org/${orgId}/jira`, data).then((r) => r.data),
 };
 
 export const lawsApi = {
