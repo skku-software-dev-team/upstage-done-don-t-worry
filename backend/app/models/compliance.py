@@ -79,6 +79,20 @@ class CanonicalMap(Base):
     clause: Mapped["Clause"] = relationship(back_populates="canonical_maps")
 
 
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, default="Default Organization")
+    jira_base_url: Mapped[str | None] = mapped_column(String(255))
+    jira_email: Mapped[str | None] = mapped_column(String(255))
+    jira_api_token: Mapped[str | None] = mapped_column(Text)
+    jira_project_key: Mapped[str | None] = mapped_column(String(50))
+    jira_cloud_id: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class OrgStatus(Base):
     __tablename__ = "org_status"
 

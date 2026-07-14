@@ -1,6 +1,7 @@
+import logging
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,14 +12,18 @@ from app.models.compliance import (
     Category,
     Clause,
     Document,
+    Organization,
     OrgStatus,
 )
+from app.services import jira
 from app.schemas.compliance import (
     CategoryRead,
     ChecklistItemDetail,
     OrgStatusRead,
     OrgStatusUpdate,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/checklist", tags=["checklist"])
 
@@ -80,7 +85,7 @@ async def list_org_status(org_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.put("/org/{org_id}/item/{canonical_id}", response_model=OrgStatusRead)
 async def upsert_org_status(
-    org_id: str,
+    org_id: uuid.UUID,
     canonical_id: uuid.UUID,
     body: OrgStatusUpdate,
     db: AsyncSession = Depends(get_db),
@@ -98,9 +103,52 @@ async def upsert_org_status(
         if body.jira_key is not None:
             status.jira_key = body.jira_key
 
+    # Lazy Jira ticket creation: first time an item reaches a tracked status
+    # (미시작/진행중/완료) and has no linked ticket yet, create one that mirrors it.
+    if status.jira_key is None and body.status in jira.CREATE_STATUSES:
+        org = await db.get(Organization, org_id)
+        if jira.is_connected(org):
+            title = await db.scalar(
+                select(CanonicalItem.merged_title).where(CanonicalItem.id == canonical_id)
+            )
+            try:
+                status.jira_key = await jira.create_issue(
+                    org, title or "체크리스트 항목", body.status
+                )
+            except Exception:  # Jira failure must not block the status update
+                logger.exception("Jira issue creation failed for %s", canonical_id)
+
     await db.commit()
     await db.refresh(status)
     return status
+
+
+@router.post("/org/{org_id}/jira/sync")
+async def sync_from_jira(org_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    org = await db.get(Organization, org_id)
+    if not jira.is_connected(org):
+        raise HTTPException(status_code=400, detail="Jira가 연결되지 않았습니다.")
+
+    rows = (
+        await db.execute(select(OrgStatus).where(OrgStatus.jira_key.is_not(None)))
+    ).scalars().all()
+    keys = [r.jira_key for r in rows if r.jira_key]
+
+    try:
+        mapping = await jira.get_statuses(org, keys)
+    except Exception as e:
+        logger.exception("Jira sync failed")
+        raise HTTPException(status_code=502, detail="Jira 동기화에 실패했습니다.") from e
+
+    updated = 0
+    for row in rows:
+        new_status = mapping.get(row.jira_key or "")
+        if new_status and new_status != row.status:
+            row.status = new_status
+            updated += 1
+
+    await db.commit()
+    return {"synced": len(keys), "updated": updated}
 
 
 @router.get("/item/{canonical_id}/status", response_model=list[OrgStatusRead])
