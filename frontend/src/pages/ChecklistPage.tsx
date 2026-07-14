@@ -106,15 +106,22 @@ export default function ChecklistPage() {
       return next;
     });
 
+  const matchesQuery = (i: ChecklistItemDetail) =>
+    query === "" || i.merged_title.toLowerCase().includes(query);
+
   const countForDoc = (dt: string | null) =>
     allItems.filter(
       (i) =>
         (dt === null || i.documents.some((d) => d.doc_type === dt)) &&
-        (categoryId === null || i.category_id === categoryId),
+        (categoryId === null || i.category_id === categoryId) &&
+        matchesQuery(i),
     ).length;
   const countForCat = (cid: string | null) =>
     allItems.filter(
-      (i) => (docType === null || i.doc_type === docType) && (cid === null || i.category_id === cid),
+      (i) =>
+        (docType === null || i.documents.some((d) => d.doc_type === docType)) &&
+        (cid === null || i.category_id === cid) &&
+        matchesQuery(i),
     ).length;
 
   return (
