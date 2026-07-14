@@ -98,6 +98,12 @@ class OrgStatusUpdate(BaseModel):
 
 
 # Laws
+class LawCreate(BaseModel):
+    name: str
+    version: str
+    enacted_date: date | None = None
+
+
 class LawRead(BaseModel):
     id: uuid.UUID
     name: str

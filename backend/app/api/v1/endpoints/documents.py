@@ -15,6 +15,7 @@ from app.models.compliance import (
     Document,
     Embedding,
 )
+from app.api.v1.endpoints.laws import link_new_clauses_to_laws
 from app.schemas.compliance import ClauseRead, DocumentCreate, DocumentRead
 from app.services.rag import find_similar_canonical_items
 from app.services.upstage import embed_text, generate_checklist_items, parse_document
@@ -90,9 +91,6 @@ async def upload_and_parse(
     md = (parsed.get("content") or {}).get("markdown", "").strip()
     if not md:
         md = (parsed.get("content") or {}).get("text", "").strip()
-
-    with open(f"/tmp/raw_parse_{doc_id}.md", "w", encoding="utf-8") as _debug_f:
-        _debug_f.write(md)
 
     raw_clauses = _segment_document(md)
 
@@ -186,10 +184,16 @@ async def upload_and_parse(
 
         await db.commit()
 
+    # Link any clauses citing a law that's already been uploaded (the
+    # reverse of laws.py's own linking, which only fires when a law is
+    # uploaded after these clauses already exist).
+    linked_laws = await link_new_clauses_to_laws(db, created_clauses)
+
     return {
         "message": "파싱 및 체크리스트 생성 완료",
         "clauses": len(created_clauses),
         "checklist_items": checklist_count,
+        "linked_laws": linked_laws,
     }
 
 

@@ -46,6 +46,7 @@ async def search_similar_articles(
 
     result = await db.execute(
         select(LawArticle)
+        .options(selectinload(LawArticle.law))
         .join(Embedding, (Embedding.source_id == LawArticle.id) & (Embedding.source_type == "law_article"))
         .order_by(Embedding.embedding.cosine_distance(query_vec))
         .limit(top_k)
@@ -114,7 +115,9 @@ async def answer_with_rag(
     if source_type in ("law_article", "all"):
         articles = await search_similar_articles(db, question)
         context_parts.extend(
-            f"[법조문 {a.article_no}] {a.article_text}" for a in articles if a.article_text
+            f"[{a.law.name if a.law else '법률'} {a.article_no}] {a.article_text}"
+            for a in articles
+            if a.article_text
         )
 
     answer = await chat_completion(

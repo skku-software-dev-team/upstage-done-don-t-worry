@@ -70,6 +70,27 @@ export interface UploadResult {
   message: string;
   clauses: number;
   checklist_items: number;
+  linked_laws?: number;
+}
+
+export interface Law {
+  id: string;
+  name: string;
+  version: string;
+  enacted_date: string | null;
+}
+
+export interface LawArticle {
+  id: string;
+  law_id: string;
+  article_no: string | null;
+  article_text: string | null;
+}
+
+export interface LawUploadResult {
+  message: string;
+  articles: number;
+  linked_clauses: number;
 }
 
 export const documentsApi = {
@@ -105,6 +126,21 @@ export const checklistApi = {
       .put<OrgStatus>(`/checklist/org/${orgId}/item/${canonicalId}`, {
         status,
         jira_key: jiraKey,
+      })
+      .then((r) => r.data),
+};
+
+export const lawsApi = {
+  list: () => client.get<Law[]>("/laws").then((r) => r.data),
+  create: (data: Pick<Law, "name" | "version" | "enacted_date">) =>
+    client.post<Law>("/laws", data).then((r) => r.data),
+  delete: (lawId: string) => client.delete(`/laws/${lawId}`),
+  articles: (lawId: string) =>
+    client.get<LawArticle[]>(`/laws/${lawId}/articles`).then((r) => r.data),
+  upload: (lawId: string, formData: FormData) =>
+    client
+      .post<LawUploadResult>(`/laws/${lawId}/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
       })
       .then((r) => r.data),
 };
