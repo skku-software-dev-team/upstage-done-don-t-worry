@@ -56,7 +56,7 @@ async def list_canonical_items(
         .outerjoin(CanonicalMap, CanonicalMap.canonical_id == CanonicalItem.id)
         .outerjoin(Clause, Clause.id == CanonicalMap.clause_id)
         .outerjoin(Document, Document.id == Clause.document_id)
-        .order_by(Category.name, CanonicalItem.merged_title)
+        .order_by(Category.name, CanonicalItem.merged_title, Document.doc_type)
     )
     if category_id is not None:
         stmt = stmt.where(CanonicalItem.category_id == category_id)

@@ -72,6 +72,7 @@ export interface JiraConnectInput {
 
 export interface ChatSource {
   id: string;
+  source_type: "clause" | "law_article";
   clause_no: string | null;
   title: string | null;
   document_name: string | null;

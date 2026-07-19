@@ -100,12 +100,13 @@ async def answer_with_rag(
     db: AsyncSession,
     question: str,
     source_type: SourceType = "all",
-) -> tuple[str, list[Clause]]:
+) -> tuple[str, list[Clause], list[LawArticle]]:
     clauses: list[Clause] = []
+    articles: list[LawArticle] = []
     context_parts: list[str] = []
 
     if source_type in ("clause", "all"):
-        clauses = await search_similar_clauses(db, question, source_type="clause")
+        clauses = await search_similar_clauses(db, question, top_k=3, source_type="clause")
         context_parts.extend(
             f"[{c.document.doc_type if c.document else '문서'} {c.clause_no}] {c.requirement}"
             for c in clauses
@@ -113,7 +114,7 @@ async def answer_with_rag(
         )
 
     if source_type in ("law_article", "all"):
-        articles = await search_similar_articles(db, question)
+        articles = await search_similar_articles(db, question, top_k=3)
         context_parts.extend(
             f"[{a.law.name if a.law else '법률'} {a.article_no}] {a.article_text}"
             for a in articles
@@ -124,4 +125,4 @@ async def answer_with_rag(
         messages=[{"role": "user", "content": question}],
         context="\n\n".join(context_parts),
     )
-    return answer, clauses
+    return answer, clauses, articles
