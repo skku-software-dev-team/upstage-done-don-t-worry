@@ -156,6 +156,7 @@ class ChatMessage(BaseModel):
 
 class ChatSource(BaseModel):
     id: uuid.UUID
+    source_type: Literal["clause", "law_article"]
     clause_no: str | None
     title: str | None
     document_name: str | None
