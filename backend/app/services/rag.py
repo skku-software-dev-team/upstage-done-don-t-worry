@@ -14,20 +14,31 @@ SourceType = Literal["clause", "law_article", "all"]
 # tune based on false positive/negative rate once tested against real data.
 DUPLICATE_CANDIDATE_MAX_DISTANCE = 0.35
 
+# Cosine distance threshold for RAG retrieval relevance. Measured against
+# real DB data: on-topic questions land clauses in the ~0.49-0.62 range and
+# law articles in ~0.44-0.75; off-topic questions (e.g. asking about GDPR
+# when no GDPR document is uploaded) land both in ~0.65-0.69. 0.63 sits in
+# the gap so irrelevant top-k results get dropped instead of always padding
+# the source list.
+RELEVANCE_MAX_DISTANCE = 0.63
+
 
 async def search_similar_clauses(
     db: AsyncSession,
     query: str,
     top_k: int = 5,
     source_type: SourceType = "all",
+    max_distance: float = RELEVANCE_MAX_DISTANCE,
 ) -> list[Clause]:
     query_vec = await embed_text(query, is_query=True)
+    distance = Embedding.embedding.cosine_distance(query_vec)
 
     stmt = (
         select(Clause)
         .options(selectinload(Clause.document))
         .join(Embedding, (Embedding.source_id == Clause.id) & (Embedding.source_type == "clause"))
-        .order_by(Embedding.embedding.cosine_distance(query_vec))
+        .where(distance < max_distance)
+        .order_by(distance)
         .limit(top_k)
     )
     if source_type == "law_article":
@@ -41,14 +52,17 @@ async def search_similar_articles(
     db: AsyncSession,
     query: str,
     top_k: int = 5,
+    max_distance: float = RELEVANCE_MAX_DISTANCE,
 ) -> list[LawArticle]:
     query_vec = await embed_text(query, is_query=True)
+    distance = Embedding.embedding.cosine_distance(query_vec)
 
     result = await db.execute(
         select(LawArticle)
         .options(selectinload(LawArticle.law))
         .join(Embedding, (Embedding.source_id == LawArticle.id) & (Embedding.source_type == "law_article"))
-        .order_by(Embedding.embedding.cosine_distance(query_vec))
+        .where(distance < max_distance)
+        .order_by(distance)
         .limit(top_k)
     )
     return list(result.scalars().all())
@@ -125,4 +139,11 @@ async def answer_with_rag(
         messages=[{"role": "user", "content": question}],
         context="\n\n".join(context_parts),
     )
+
+    # Retrieval hands the LLM several candidates, but it only ends up citing
+    # some of them. Only surface sources the answer actually references —
+    # otherwise unused candidates show up as misleading "참고" entries.
+    clauses = [c for c in clauses if not c.clause_no or c.clause_no in answer]
+    articles = [a for a in articles if not a.article_no or a.article_no in answer]
+
     return answer, clauses, articles

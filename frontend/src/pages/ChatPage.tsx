@@ -8,6 +8,26 @@ function sourceLabel(s: ChatSource): string {
   return [s.doc_type, s.clause_no, s.title].filter(Boolean).join(" ") || s.id.slice(0, 8);
 }
 
+// Solar sometimes emits a stray space right inside "**[...]**" citation
+// markers (e.g. "** [CSAP 2.1.5]**"). CommonMark requires "**" to be
+// immediately adjacent to content to count as an emphasis delimiter, so the
+// stray space leaves it unparsed and the raw asterisks show up in the UI.
+// Strip that whitespace before handing the text to react-markdown.
+function normalizeMarkdown(text: string): string {
+  text = text.replace(/\*\*\s*(\[[^\]\n]+\])\s*\*\*/g, "**$1**");
+  // Bold content ending in punctuation (e.g. "]") immediately followed by a
+  // word char with no space (a Korean particle like "를/은/이" attaches
+  // directly, no space) fails CommonMark's right-flanking rule for the
+  // closer, so it renders as a literal "**". Pull the trailing word-run
+  // inside the bold span so the closer is preceded by a non-punctuation
+  // char instead.
+  text = text.replace(
+    /\*\*([^*\n]*[\]).,:;!?'"])\*\*([\p{L}\p{N}]+)/gu,
+    (_m, content: string, trailing: string) => "**" + content + trailing + "**",
+  );
+  return text;
+}
+
 // Inline style overrides for markdown elements — this project has no CSS
 // files, everything is styled via the `style` prop, so react-markdown's
 // default unstyled tags need explicit component overrides here too.
@@ -98,7 +118,7 @@ export default function ChatPage() {
             >
               {m.role === "assistant" ? (
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                  {m.content}
+                  {normalizeMarkdown(m.content)}
                 </ReactMarkdown>
               ) : (
                 m.content
