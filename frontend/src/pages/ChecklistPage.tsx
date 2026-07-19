@@ -1,13 +1,22 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { checklistApi, type ChecklistItemDetail, type OrgStatus } from "@/api/compliance";
+import {
+  checklistApi,
+  orgApi,
+  type ChecklistItemDetail,
+  type JiraConnectInput,
+  type OrgStatus,
+} from "@/api/compliance";
 
 const DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001";
 
 const STATUS_OPTIONS = ["not_started", "in_progress", "completed", "not_applicable"] as const;
 type Status = (typeof STATUS_OPTIONS)[number];
+// "untouched" = no org_status row yet (nothing checked, no Jira ticket).
+type DisplayStatus = Status | "untouched";
 
-const statusLabel: Record<Status, string> = {
+const statusLabel: Record<DisplayStatus, string> = {
+  untouched: "미설정",
   not_started: "미시작",
   in_progress: "진행중",
   completed: "완료",
@@ -68,9 +77,15 @@ export default function ChecklistPage() {
     queryFn: () => checklistApi.orgStatus(orgId),
   });
 
+  const { data: org } = useQuery({
+    queryKey: ["org", orgId],
+    queryFn: () => orgApi.get(orgId),
+  });
+  const jiraBaseUrl = org?.jira_base_url ?? null;
+
   const statusMap = new Map<string, OrgStatus>(statuses.map((s) => [s.canonical_id, s]));
-  const statusOf = (item: ChecklistItemDetail): Status =>
-    (statusMap.get(item.id)?.status as Status) ?? "not_started";
+  const statusOf = (item: ChecklistItemDetail): DisplayStatus =>
+    (statusMap.get(item.id)?.status as DisplayStatus) ?? "untouched";
 
   const { mutate: updateStatus } = useMutation({
     mutationFn: ({ canonicalId, status }: { canonicalId: string; status: Status }) =>
@@ -138,6 +153,8 @@ export default function ChecklistPage() {
   return (
     <div style={{ padding: "2rem", maxWidth: 720, margin: "0 auto" }}>
       <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "1rem" }}>체크리스트</h1>
+
+      <JiraSettings orgId={orgId} />
 
       <input
         type="text"
@@ -299,6 +316,8 @@ export default function ChecklistPage() {
                         key={item.id}
                         item={item}
                         status={statusOf(item)}
+                        jiraKey={statusMap.get(item.id)?.jira_key ?? null}
+                        jiraBaseUrl={jiraBaseUrl}
                         isOpen={openStatusFor === item.id}
                         onToggleOpen={() =>
                           setOpenStatusFor(openStatusFor === item.id ? null : item.id)
@@ -384,19 +403,20 @@ function FilterChip({
   );
 }
 
-function checkboxGlyph(status: Status) {
+function checkboxGlyph(status: DisplayStatus) {
   if (status === "completed") return "✓";
   if (status === "not_applicable") return "–";
   if (status === "in_progress") return "●";
   return "";
 }
 
-function checkboxStyle(status: Status): React.CSSProperties {
-  const palette: Record<Status, { border: string; bg: string; fg: string }> = {
+function checkboxStyle(status: DisplayStatus): React.CSSProperties {
+  const palette: Record<DisplayStatus, { border: string; bg: string; fg: string }> = {
     completed: { border: "#16a34a", bg: "#16a34a", fg: "white" },
     in_progress: { border: "#ca8a04", bg: "white", fg: "#ca8a04" },
     not_applicable: { border: "#d1d5db", bg: "#f3f4f6", fg: "#9ca3af" },
-    not_started: { border: "#d1d5db", bg: "white", fg: "white" },
+    not_started: { border: "#9ca3af", bg: "white", fg: "white" },
+    untouched: { border: "#e5e7eb", bg: "#fafafa", fg: "white" },
   };
   const c = palette[status];
   return {
@@ -421,12 +441,16 @@ function checkboxStyle(status: Status): React.CSSProperties {
 function ChecklistRow({
   item,
   status,
+  jiraKey,
+  jiraBaseUrl,
   isOpen,
   onToggleOpen,
   onSelect,
 }: {
   item: ChecklistItemDetail;
-  status: Status;
+  status: DisplayStatus;
+  jiraKey: string | null;
+  jiraBaseUrl: string | null;
   isOpen: boolean;
   onToggleOpen: () => void;
   onSelect: (status: Status) => void;
@@ -515,6 +539,229 @@ function ChecklistRow({
             </span>
           ))}
         </span>
+      )}
+
+      {jiraKey && (
+        <a
+          href={jiraBaseUrl ? `${jiraBaseUrl}/browse/${jiraKey}` : undefined}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            marginLeft: item.doc_type ? 0 : "auto",
+            padding: "0.15rem 0.5rem",
+            borderRadius: 4,
+            background: "#eff6ff",
+            color: "#1d4ed8",
+            fontSize: "0.7rem",
+            fontWeight: 700,
+            whiteSpace: "nowrap",
+            textDecoration: "none",
+          }}
+        >
+          {jiraKey}
+        </a>
+      )}
+    </div>
+  );
+}
+
+const JIRA_DEFAULTS = {
+  jira_base_url: "https://personal-search-agent.atlassian.net",
+  jira_email: "",
+  jira_api_token: "",
+  jira_project_key: "DDW",
+};
+
+function JiraSettings({ orgId }: { orgId: string }) {
+  const qc = useQueryClient();
+  const { data: org } = useQuery({
+    queryKey: ["org", orgId],
+    queryFn: () => orgApi.get(orgId),
+  });
+
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<JiraConnectInput>(JIRA_DEFAULTS);
+
+  const connected = org?.jira_connected ?? false;
+  const showForm = editing || !connected;
+
+  const { mutate: save, isPending, isError } = useMutation({
+    mutationFn: (input: JiraConnectInput) => orgApi.connectJira(orgId, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["org", orgId] });
+      setEditing(false);
+      setForm((f) => ({ ...f, jira_api_token: "" }));
+    },
+  });
+
+  const {
+    mutate: sync,
+    isPending: isSyncing,
+    data: syncResult,
+  } = useMutation({
+    mutationFn: () => checklistApi.syncJira(orgId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["org-status", orgId] }),
+  });
+
+  const startEditing = () => {
+    setForm({
+      jira_base_url: org?.jira_base_url ?? JIRA_DEFAULTS.jira_base_url,
+      jira_email: org?.jira_email ?? "",
+      jira_api_token: "",
+      jira_project_key: org?.jira_project_key ?? JIRA_DEFAULTS.jira_project_key,
+    });
+    setEditing(true);
+  };
+
+  const canSave =
+    form.jira_base_url.trim() &&
+    form.jira_email.trim() &&
+    form.jira_api_token.trim() &&
+    form.jira_project_key.trim();
+
+  const field = (
+    label: string,
+    key: keyof JiraConnectInput,
+    placeholder: string,
+    type = "text",
+  ) => (
+    <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.72rem", color: "#6b7280", fontWeight: 600 }}>
+      {label}
+      <input
+        type={type}
+        value={form[key]}
+        placeholder={placeholder}
+        onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+        style={{
+          padding: "0.45rem 0.6rem",
+          borderRadius: 6,
+          border: "1px solid #d1d5db",
+          fontSize: "0.82rem",
+          fontWeight: 400,
+          color: "#111827",
+          boxSizing: "border-box",
+        }}
+      />
+    </label>
+  );
+
+  return (
+    <div
+      style={{
+        border: `1px solid ${connected ? "#bbf7d0" : "#e5e7eb"}`,
+        background: connected ? "#f0fdf4" : "#fafafa",
+        borderRadius: 10,
+        padding: "0.9rem 1rem",
+        marginBottom: "1.25rem",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: showForm ? "0.85rem" : 0 }}>
+        <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "#111827" }}>Jira 연동</span>
+        <span
+          style={{
+            fontSize: "0.72rem",
+            fontWeight: 600,
+            padding: "0.1rem 0.5rem",
+            borderRadius: 999,
+            background: connected ? "#dcfce7" : "#f3f4f6",
+            color: connected ? "#15803d" : "#6b7280",
+          }}
+        >
+          {connected ? "● 연결됨" : "○ 미연결"}
+        </span>
+        {connected && !editing && (
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+            <button
+              onClick={() => sync()}
+              disabled={isSyncing}
+              style={{
+                fontSize: "0.75rem",
+                fontWeight: 600,
+                color: "white",
+                background: isSyncing ? "#86efac" : "#16a34a",
+                border: "none",
+                borderRadius: 6,
+                padding: "0.35rem 0.7rem",
+                cursor: isSyncing ? "default" : "pointer",
+              }}
+            >
+              {isSyncing ? "동기화 중..." : "↻ Jira에서 동기화"}
+            </button>
+            <button
+              onClick={startEditing}
+              style={{
+                fontSize: "0.75rem",
+                fontWeight: 600,
+                color: "#2563eb",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              재설정
+            </button>
+          </div>
+        )}
+      </div>
+
+      {connected && !editing && (
+        <div style={{ fontSize: "0.78rem", color: "#4b5563", marginTop: 6 }}>
+          {org?.jira_base_url} · 프로젝트 <strong>{org?.jira_project_key}</strong> · {org?.jira_email}
+          {syncResult && (
+            <span style={{ marginLeft: 8, color: "#15803d", fontWeight: 600 }}>
+              · {syncResult.updated}건 업데이트됨 (총 {syncResult.synced}건 확인)
+            </span>
+          )}
+        </div>
+      )}
+
+      {showForm && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+          {field("사이트 URL", "jira_base_url", "https://your-site.atlassian.net")}
+          {field("이메일", "jira_email", "you@example.com")}
+          {field("API 토큰", "jira_api_token", "Atlassian API token", "password")}
+          {field("프로젝트 키", "jira_project_key", "DDW")}
+
+          {isError && (
+            <div style={{ fontSize: "0.75rem", color: "#dc2626" }}>저장에 실패했습니다. 다시 시도하세요.</div>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              disabled={!canSave || isPending}
+              onClick={() => save(form)}
+              style={{
+                padding: "0.5rem 1rem",
+                borderRadius: 6,
+                border: "none",
+                background: !canSave || isPending ? "#93c5fd" : "#2563eb",
+                color: "white",
+                fontSize: "0.82rem",
+                fontWeight: 600,
+                cursor: !canSave || isPending ? "default" : "pointer",
+              }}
+            >
+              {isPending ? "저장 중..." : "저장"}
+            </button>
+            {connected && editing && (
+              <button
+                onClick={() => setEditing(false)}
+                style={{
+                  padding: "0.5rem 1rem",
+                  borderRadius: 6,
+                  border: "1px solid #d1d5db",
+                  background: "white",
+                  color: "#374151",
+                  fontSize: "0.82rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                취소
+              </button>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

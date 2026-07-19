@@ -97,6 +97,24 @@ class OrgStatusUpdate(BaseModel):
     jira_key: str | None = None
 
 
+# Organization / Jira connection
+class OrganizationRead(BaseModel):
+    id: uuid.UUID
+    name: str
+    jira_base_url: str | None
+    jira_email: str | None
+    jira_project_key: str | None
+    jira_connected: bool  # true when all required Jira fields are set (token never returned)
+    updated_at: datetime
+
+
+class OrganizationJiraUpdate(BaseModel):
+    jira_base_url: str
+    jira_email: str
+    jira_api_token: str
+    jira_project_key: str
+
+
 # Laws
 class LawCreate(BaseModel):
     name: str

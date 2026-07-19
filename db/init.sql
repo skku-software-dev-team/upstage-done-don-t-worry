@@ -41,6 +41,18 @@ CREATE TABLE IF NOT EXISTS canonical_map (
     PRIMARY KEY (canonical_id, clause_id)
 );
 
+CREATE TABLE IF NOT EXISTS organizations (
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name             VARCHAR(255) NOT NULL DEFAULT 'Default Organization',
+    jira_base_url    VARCHAR(255),
+    jira_email       VARCHAR(255),
+    jira_api_token   TEXT,
+    jira_project_key VARCHAR(50),
+    jira_cloud_id    VARCHAR(50),
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS org_status (
     id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     canonical_id UUID NOT NULL REFERENCES canonical_items(id) ON DELETE CASCADE,
