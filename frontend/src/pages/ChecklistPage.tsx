@@ -34,8 +34,10 @@ interface CategoryGroup {
 export default function ChecklistPage() {
   const qc = useQueryClient();
   const [orgId] = useState(DEFAULT_ORG_ID);
-  const [docType, setDocType] = useState<string | null>(null);
-  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [selectedDocTypes, setSelectedDocTypes] = useState<Set<string>>(new Set());
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<Set<string>>(new Set());
+  const [multiSelectDocType, setMultiSelectDocType] = useState(false);
+  const [multiSelectCategory, setMultiSelectCategory] = useState(false);
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [openStatusFor, setOpenStatusFor] = useState<string | null>(null);
@@ -58,11 +60,16 @@ export default function ChecklistPage() {
   ).sort((a, b) => a[1].localeCompare(b[1], "ko"));
 
   const query = search.trim().toLowerCase();
+  const matchesQuery = (i: ChecklistItemDetail) =>
+    query === "" || i.merged_title.toLowerCase().includes(query);
+
   const items = allItems.filter(
     (i) =>
-      (docType === null || i.documents.some((d) => d.doc_type === docType)) &&
-      (categoryId === null || i.category_id === categoryId) &&
-      (query === "" || i.merged_title.toLowerCase().includes(query)),
+      (selectedDocTypes.size === 0 ||
+        i.documents.some((d) => selectedDocTypes.has(d.doc_type))) &&
+      (selectedCategoryIds.size === 0 ||
+        (i.category_id !== null && selectedCategoryIds.has(i.category_id))) &&
+      matchesQuery(i),
   );
 
   const { data: statuses = [] } = useQuery({
@@ -113,28 +120,32 @@ export default function ChecklistPage() {
   }
   groups.sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
-  const toggleCollapse = (id: string) =>
-    setCollapsed((prev) => {
+  const toggleSetMember = (
+    setter: React.Dispatch<React.SetStateAction<Set<string>>>,
+    value: string,
+  ) =>
+    setter((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
       return next;
     });
 
-  const matchesQuery = (i: ChecklistItemDetail) =>
-    query === "" || i.merged_title.toLowerCase().includes(query);
+  const toggleCollapse = (id: string) => toggleSetMember(setCollapsed, id);
 
   const countForDoc = (dt: string | null) =>
     allItems.filter(
       (i) =>
         (dt === null || i.documents.some((d) => d.doc_type === dt)) &&
-        (categoryId === null || i.category_id === categoryId) &&
+        (selectedCategoryIds.size === 0 ||
+          (i.category_id !== null && selectedCategoryIds.has(i.category_id))) &&
         matchesQuery(i),
     ).length;
   const countForCat = (cid: string | null) =>
     allItems.filter(
       (i) =>
-        (docType === null || i.documents.some((d) => d.doc_type === docType)) &&
+        (selectedDocTypes.size === 0 ||
+          i.documents.some((d) => selectedDocTypes.has(d.doc_type))) &&
         (cid === null || i.category_id === cid) &&
         matchesQuery(i),
     ).length;
@@ -163,17 +174,37 @@ export default function ChecklistPage() {
 
       {presentDocTypes.length > 0 && (
         <div style={{ marginBottom: "0.75rem" }}>
-          <div style={{ fontSize: "0.72rem", color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
-            문서 / 인증
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: 6 }}>
+            <span style={{ fontSize: "0.72rem", color: "#9ca3af", fontWeight: 600 }}>
+              문서 / 인증
+            </span>
+            <MultiSelectToggle
+              checked={multiSelectDocType}
+              onChange={(checked) => {
+                setMultiSelectDocType(checked);
+                setSelectedDocTypes(new Set());
+              }}
+            />
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-            <button style={chipStyle(docType === null)} onClick={() => setDocType(null)}>
+            <button
+              style={chipStyle(selectedDocTypes.size === 0)}
+              onClick={() => setSelectedDocTypes(new Set())}
+            >
               전체 ({countForDoc(null)})
             </button>
             {presentDocTypes.map((dt) => (
-              <button key={dt} style={chipStyle(docType === dt)} onClick={() => setDocType(dt)}>
-                {dt} ({countForDoc(dt)})
-              </button>
+              <FilterChip
+                key={dt}
+                label={`${dt} (${countForDoc(dt)})`}
+                active={selectedDocTypes.has(dt)}
+                accent="#2563eb"
+                onClick={() =>
+                  multiSelectDocType
+                    ? toggleSetMember(setSelectedDocTypes, dt)
+                    : setSelectedDocTypes(new Set([dt]))
+                }
+              />
             ))}
           </div>
         </div>
@@ -181,24 +212,37 @@ export default function ChecklistPage() {
 
       {presentCategories.length > 0 && (
         <div style={{ marginBottom: "1.5rem" }}>
-          <div style={{ fontSize: "0.72rem", color: "#9ca3af", fontWeight: 600, marginBottom: 6 }}>
-            카테고리
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: 6 }}>
+            <span style={{ fontSize: "0.72rem", color: "#9ca3af", fontWeight: 600 }}>
+              카테고리
+            </span>
+            <MultiSelectToggle
+              checked={multiSelectCategory}
+              onChange={(checked) => {
+                setMultiSelectCategory(checked);
+                setSelectedCategoryIds(new Set());
+              }}
+            />
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
             <button
-              style={chipStyle(categoryId === null, "#059669")}
-              onClick={() => setCategoryId(null)}
+              style={chipStyle(selectedCategoryIds.size === 0, "#059669")}
+              onClick={() => setSelectedCategoryIds(new Set())}
             >
               전체 ({countForCat(null)})
             </button>
             {presentCategories.map(([id, name]) => (
-              <button
+              <FilterChip
                 key={id}
-                style={chipStyle(categoryId === id, "#059669")}
-                onClick={() => setCategoryId(id)}
-              >
-                {name} ({countForCat(id)})
-              </button>
+                label={`${name} (${countForCat(id)})`}
+                active={selectedCategoryIds.has(id)}
+                accent="#059669"
+                onClick={() =>
+                  multiSelectCategory
+                    ? toggleSetMember(setSelectedCategoryIds, id)
+                    : setSelectedCategoryIds(new Set([id]))
+                }
+              />
             ))}
           </div>
         </div>
@@ -292,6 +336,70 @@ export default function ChecklistPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function MultiSelectToggle({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.3rem",
+        fontSize: "0.7rem",
+        color: "#9ca3af",
+        cursor: "pointer",
+        userSelect: "none",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ cursor: "pointer" }}
+      />
+      복수 선택
+    </label>
+  );
+}
+
+function FilterChip({
+  label,
+  active,
+  accent,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  accent: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.4rem",
+        padding: "0.35rem 0.85rem",
+        borderRadius: 999,
+        border: `1px solid ${active ? accent : "#d1d5db"}`,
+        background: active ? accent : "white",
+        color: active ? "white" : "#374151",
+        fontSize: "0.8rem",
+        fontWeight: 600,
+        cursor: "pointer",
+        transition: "all 0.15s",
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
