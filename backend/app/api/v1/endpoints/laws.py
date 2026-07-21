@@ -5,27 +5,41 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.models.compliance import Clause, ClauseLawRef, Embedding, Law, LawArticle
+from app.models.compliance import Clause, ClauseLawRef, Document, Embedding, Law, LawArticle, User
 from app.schemas.compliance import LawArticleRead, LawCreate, LawRead
 from app.services.upstage import embed_text, parse_document
 
-router = APIRouter(prefix="/laws", tags=["laws"])
+router = APIRouter(prefix="/laws", tags=["laws"], dependencies=[Depends(get_current_user)])
 
 # "제29조" or "제29조의2" — the standard Korean statute article-number format.
 ARTICLE_HEADER_PATTERN = re.compile(r'^제\s*(\d+조(?:의\d+)?)\s*(?:\(([^)]*)\))?', re.MULTILINE)
 ARTICLE_REF_PATTERN = re.compile(r'제\s*\d+조(?:의\d+)?')
 
 
+async def _get_owned_law(law_id: uuid.UUID, organization_id: uuid.UUID, db: AsyncSession) -> Law:
+    law = await db.get(Law, law_id)
+    if not law or law.organization_id != organization_id:
+        raise HTTPException(404, "Law not found")
+    return law
+
+
 @router.get("", response_model=list[LawRead])
-async def list_laws(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Law).order_by(Law.name))
+async def list_laws(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Law).where(Law.organization_id == current_user.organization_id).order_by(Law.name)
+    )
     return result.scalars().all()
 
 
 @router.post("", response_model=LawRead, status_code=201)
-async def create_law(body: LawCreate, db: AsyncSession = Depends(get_db)):
-    law = Law(**body.model_dump())
+async def create_law(
+    body: LawCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    law = Law(organization_id=current_user.organization_id, **body.model_dump())
     db.add(law)
     await db.commit()
     await db.refresh(law)
@@ -33,16 +47,23 @@ async def create_law(body: LawCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/{law_id}", status_code=204)
-async def delete_law(law_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    law = await db.get(Law, law_id)
-    if not law:
-        raise HTTPException(404, "Law not found")
+async def delete_law(
+    law_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    law = await _get_owned_law(law_id, current_user.organization_id, db)
     await db.delete(law)
     await db.commit()
 
 
 @router.get("/{law_id}/articles", response_model=list[LawArticleRead])
-async def list_articles(law_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def list_articles(
+    law_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _get_owned_law(law_id, current_user.organization_id, db)
     result = await db.execute(select(LawArticle).where(LawArticle.law_id == law_id))
     return result.scalars().all()
 
@@ -51,11 +72,10 @@ async def list_articles(law_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def upload_law(
     law_id: uuid.UUID,
     file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    law = await db.get(Law, law_id)
-    if not law:
-        raise HTTPException(404, "Law not found")
+    law = await _get_owned_law(law_id, current_user.organization_id, db)
 
     content = await file.read()
     parsed = await parse_document(content, file.filename or "law.pdf")
@@ -132,16 +152,21 @@ def _matched_articles(text: str, article_by_no: dict[str, LawArticle]) -> list[L
 
 
 async def _link_clauses_to_law(db: AsyncSession, law: Law, articles: list[LawArticle]) -> int:
-    """Called after a law's articles are parsed: find existing clauses whose
-    related_laws_raw mentions this law by name and link the ones citing an
-    article we just parsed."""
+    """Called after a law's articles are parsed: find existing clauses (within
+    the same organization as the law) whose related_laws_raw mentions this law
+    by name and link the ones citing an article we just parsed."""
     article_by_no = {a.article_no: a for a in articles if a.article_no}
     if not article_by_no:
         return 0
 
     candidates = (
         await db.execute(
-            select(Clause).where(Clause.related_laws_raw.ilike(f"%{law.name}%"))
+            select(Clause)
+            .join(Document, Document.id == Clause.document_id)
+            .where(
+                Document.organization_id == law.organization_id,
+                Clause.related_laws_raw.ilike(f"%{law.name}%"),
+            )
         )
     ).scalars().all()
 
@@ -158,15 +183,20 @@ async def _link_clauses_to_law(db: AsyncSession, law: Law, articles: list[LawArt
     return linked
 
 
-async def link_new_clauses_to_laws(db: AsyncSession, clauses: list[Clause]) -> int:
+async def link_new_clauses_to_laws(
+    db: AsyncSession, clauses: list[Clause], organization_id: uuid.UUID
+) -> int:
     """Reverse direction of _link_clauses_to_law: called after a compliance
     document (ISMS-P/CSAP/...) is parsed, so clauses that reference a law
-    already uploaded get linked too, regardless of which was uploaded first."""
+    already uploaded (within the same organization) get linked too, regardless
+    of which was uploaded first."""
     mentionable = [c for c in clauses if c.related_laws_raw]
     if not mentionable:
         return 0
 
-    laws = (await db.execute(select(Law))).scalars().all()
+    laws = (
+        await db.execute(select(Law).where(Law.organization_id == organization_id))
+    ).scalars().all()
     if not laws:
         return 0
 

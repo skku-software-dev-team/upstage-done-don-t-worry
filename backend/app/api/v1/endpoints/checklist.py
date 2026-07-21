@@ -5,28 +5,49 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.compliance import (
     CanonicalItem,
     CanonicalMap,
     Category,
+    ChecklistPeriod,
     Clause,
     Document,
     Organization,
     OrgStatus,
+    User,
 )
 from app.services import jira
 from app.schemas.compliance import (
     CategoryRead,
     ChecklistDocRef,
     ChecklistItemDetail,
+    ChecklistPeriodCreate,
+    ChecklistPeriodRead,
     OrgStatusRead,
     OrgStatusUpdate,
 )
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/checklist", tags=["checklist"])
+router = APIRouter(prefix="/checklist", tags=["checklist"], dependencies=[Depends(get_current_user)])
+
+
+async def _get_current_period(db: AsyncSession, organization_id: uuid.UUID) -> ChecklistPeriod:
+    result = await db.execute(
+        select(ChecklistPeriod).where(
+            ChecklistPeriod.organization_id == organization_id,
+            ChecklistPeriod.is_current.is_(True),
+        )
+    )
+    period = result.scalar_one_or_none()
+    if period is None:
+        period = ChecklistPeriod(organization_id=organization_id, label="진행중", is_current=True)
+        db.add(period)
+        await db.commit()
+        await db.refresh(period)
+    return period
 
 
 @router.get("/categories", response_model=list[CategoryRead])
@@ -39,6 +60,7 @@ async def list_categories(db: AsyncSession = Depends(get_db)):
 async def list_canonical_items(
     category_id: uuid.UUID | None = Query(default=None, description="카테고리로 필터링"),
     document_id: uuid.UUID | None = Query(default=None, description="문서로 필터링"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     # canonical_item → category (name) and → clause → document (doc_type)
@@ -52,6 +74,7 @@ async def list_canonical_items(
             Document.doc_type,
             Document.name.label("document_name"),
         )
+        .where(CanonicalItem.organization_id == current_user.organization_id)
         .outerjoin(Category, Category.id == CanonicalItem.category_id)
         .outerjoin(CanonicalMap, CanonicalMap.canonical_id == CanonicalItem.id)
         .outerjoin(Clause, Clause.id == CanonicalMap.clause_id)
@@ -94,26 +117,98 @@ async def list_canonical_items(
     return list(items.values())
 
 
-@router.get("/org/{org_id}", response_model=list[OrgStatusRead])
-async def list_org_status(org_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(OrgStatus))
+@router.get("/periods", response_model=list[ChecklistPeriodRead])
+async def list_periods(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(ChecklistPeriod)
+        .where(ChecklistPeriod.organization_id == current_user.organization_id)
+        .order_by(ChecklistPeriod.created_at.desc())
+    )
     return result.scalars().all()
 
 
-@router.put("/org/{org_id}/item/{canonical_id}", response_model=OrgStatusRead)
-async def upsert_org_status(
-    org_id: uuid.UUID,
-    canonical_id: uuid.UUID,
-    body: OrgStatusUpdate,
+@router.post("/periods", response_model=ChecklistPeriodRead)
+async def save_period(
+    body: ChecklistPeriodCreate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    current = await _get_current_period(db, current_user.organization_id)
+
+    new_period = ChecklistPeriod(
+        organization_id=current_user.organization_id,
+        label=body.label,
+        start_date=body.start_date,
+        end_date=body.end_date,
+        is_current=False,
+    )
+    db.add(new_period)
+    await db.flush()
+
+    rows = (
+        await db.execute(select(OrgStatus).where(OrgStatus.period_id == current.id))
+    ).scalars().all()
+    for row in rows:
+        db.add(
+            OrgStatus(
+                organization_id=current_user.organization_id,
+                canonical_id=row.canonical_id,
+                period_id=new_period.id,
+                status=row.status,
+                jira_key=row.jira_key,
+            )
+        )
+
+    await db.commit()
+    await db.refresh(new_period)
+    return new_period
+
+
+@router.get("/status", response_model=list[OrgStatusRead])
+async def list_org_status(
+    period_id: uuid.UUID | None = Query(default=None, description="기간 ID (없으면 진행중 기간)"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if period_id is None:
+        period_id = (await _get_current_period(db, current_user.organization_id)).id
     result = await db.execute(
-        select(OrgStatus).where(OrgStatus.canonical_id == canonical_id)
+        select(OrgStatus).where(
+            OrgStatus.organization_id == current_user.organization_id,
+            OrgStatus.period_id == period_id,
+        )
+    )
+    return result.scalars().all()
+
+
+@router.put("/item/{canonical_id}", response_model=OrgStatusRead)
+async def upsert_org_status(
+    canonical_id: uuid.UUID,
+    body: OrgStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    period_id = body.period_id
+    if period_id is None:
+        period_id = (await _get_current_period(db, current_user.organization_id)).id
+
+    result = await db.execute(
+        select(OrgStatus).where(
+            OrgStatus.organization_id == current_user.organization_id,
+            OrgStatus.canonical_id == canonical_id,
+            OrgStatus.period_id == period_id,
+        )
     )
     status = result.scalar_one_or_none()
 
     if status is None:
-        status = OrgStatus(canonical_id=canonical_id, **body.model_dump())
+        status = OrgStatus(
+            organization_id=current_user.organization_id,
+            canonical_id=canonical_id,
+            period_id=period_id,
+            status=body.status,
+            jira_key=body.jira_key,
+        )
         db.add(status)
     else:
         status.status = body.status
@@ -123,7 +218,7 @@ async def upsert_org_status(
     # Lazy Jira ticket creation: first time an item reaches a tracked status
     # (미시작/진행중/완료) and has no linked ticket yet, create one that mirrors it.
     if status.jira_key is None and body.status in jira.CREATE_STATUSES:
-        org = await db.get(Organization, org_id)
+        org = await db.get(Organization, current_user.organization_id)
         if jira.is_connected(org):
             title = await db.scalar(
                 select(CanonicalItem.merged_title).where(CanonicalItem.id == canonical_id)
@@ -140,14 +235,19 @@ async def upsert_org_status(
     return status
 
 
-@router.post("/org/{org_id}/jira/sync")
-async def sync_from_jira(org_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    org = await db.get(Organization, org_id)
+@router.post("/jira/sync")
+async def sync_from_jira(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    org = await db.get(Organization, current_user.organization_id)
     if not jira.is_connected(org):
         raise HTTPException(status_code=400, detail="Jira가 연결되지 않았습니다.")
 
     rows = (
-        await db.execute(select(OrgStatus).where(OrgStatus.jira_key.is_not(None)))
+        await db.execute(
+            select(OrgStatus).where(
+                OrgStatus.organization_id == current_user.organization_id,
+                OrgStatus.jira_key.is_not(None),
+            )
+        )
     ).scalars().all()
     keys = [r.jira_key for r in rows if r.jira_key]
 
@@ -169,8 +269,15 @@ async def sync_from_jira(org_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/item/{canonical_id}/status", response_model=list[OrgStatusRead])
-async def get_item_status(canonical_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_item_status(
+    canonical_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(
-        select(OrgStatus).where(OrgStatus.canonical_id == canonical_id)
+        select(OrgStatus).where(
+            OrgStatus.organization_id == current_user.organization_id,
+            OrgStatus.canonical_id == canonical_id,
+        )
     )
     return result.scalars().all()

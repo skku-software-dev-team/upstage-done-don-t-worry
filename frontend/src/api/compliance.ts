@@ -46,11 +46,20 @@ export interface ChecklistItemDetail {
 
 export interface OrgStatus {
   id: string;
-  org_id: string;
   canonical_id: string;
+  period_id: string;
   status: string;
   jira_key: string | null;
   updated_at: string;
+}
+
+export interface ChecklistPeriod {
+  id: string;
+  label: string;
+  start_date: string | null;
+  end_date: string | null;
+  is_current: boolean;
+  created_at: string;
 }
 
 export interface Organization {
@@ -137,26 +146,37 @@ export const checklistApi = {
       })
       .then((r) => r.data),
   categories: () => client.get<Category[]>("/checklist/categories").then((r) => r.data),
-  orgStatus: (orgId: string) =>
-    client.get<OrgStatus[]>(`/checklist/org/${orgId}`).then((r) => r.data),
-  updateStatus: (orgId: string, canonicalId: string, status: string, jiraKey?: string) =>
+  orgStatus: (periodId?: string) =>
     client
-      .put<OrgStatus>(`/checklist/org/${orgId}/item/${canonicalId}`, {
+      .get<OrgStatus[]>("/checklist/status", { params: { period_id: periodId } })
+      .then((r) => r.data),
+  updateStatus: (canonicalId: string, status: string, jiraKey?: string, periodId?: string) =>
+    client
+      .put<OrgStatus>(`/checklist/item/${canonicalId}`, {
         status,
         jira_key: jiraKey,
+        period_id: periodId,
       })
       .then((r) => r.data),
-  syncJira: (orgId: string) =>
+  syncJira: () =>
     client
-      .post<{ synced: number; updated: number }>(`/checklist/org/${orgId}/jira/sync`)
+      .post<{ synced: number; updated: number }>("/checklist/jira/sync")
+      .then((r) => r.data),
+  periods: () => client.get<ChecklistPeriod[]>("/checklist/periods").then((r) => r.data),
+  savePeriod: (label: string, startDate?: string, endDate?: string) =>
+    client
+      .post<ChecklistPeriod>("/checklist/periods", {
+        label,
+        start_date: startDate,
+        end_date: endDate,
+      })
       .then((r) => r.data),
 };
 
 export const orgApi = {
-  get: (orgId: string) =>
-    client.get<Organization>(`/org/${orgId}`).then((r) => r.data),
-  connectJira: (orgId: string, data: JiraConnectInput) =>
-    client.put<Organization>(`/org/${orgId}/jira`, data).then((r) => r.data),
+  get: () => client.get<Organization>("/org").then((r) => r.data),
+  connectJira: (data: JiraConnectInput) =>
+    client.put<Organization>("/org/jira", data).then((r) => r.data),
 };
 
 export const lawsApi = {
@@ -175,8 +195,6 @@ export const lawsApi = {
 };
 
 export const chatApi = {
-  send: (message: string, orgId?: string) =>
-    client
-      .post<ChatResponse>("/chat", { message, org_id: orgId })
-      .then((r) => r.data),
+  send: (message: string) =>
+    client.post<ChatResponse>("/chat", { message }).then((r) => r.data),
 };
