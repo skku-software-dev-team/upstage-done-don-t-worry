@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -8,18 +8,16 @@ import {
   type JiraConnectInput,
   type OrgStatus,
 } from "@/api/compliance";
+import { exportChecklistToExcel } from "@/lib/exportExcel";
 
 const STATUS_OPTIONS = ["not_started", "in_progress", "completed", "not_applicable"] as const;
 type Status = (typeof STATUS_OPTIONS)[number];
-// "untouched" = no org_status row yet (nothing checked, no Jira ticket).
-type DisplayStatus = Status | "untouched";
 
-const statusLabel: Record<DisplayStatus, string> = {
-  untouched: "미설정",
-  not_started: "미시작",
-  in_progress: "진행중",
-  completed: "완료",
-  not_applicable: "해당없음",
+const statusLabel: Record<Status, string> = {
+  not_started: "진행 예정",
+  in_progress: "진행 중",
+  completed: "진행 완료",
+  not_applicable: "비활성화",
 };
 
 const UNCATEGORIZED_ID = "__uncategorized__";
@@ -41,7 +39,11 @@ export default function ChecklistPage() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [openStatusFor, setOpenStatusFor] = useState<string | null>(null);
 
-  const { data: allItems = [] } = useQuery({
+  const {
+    data: allItems = [],
+    isLoading: itemsLoading,
+    isError: itemsError,
+  } = useQuery({
     queryKey: ["checklist-items"],
     queryFn: () => checklistApi.list(),
   });
@@ -71,10 +73,17 @@ export default function ChecklistPage() {
       matchesQuery(i),
   );
 
-  const { data: statuses = [] } = useQuery({
+  const {
+    data: statuses = [],
+    isLoading: statusesLoading,
+    isError: statusesError,
+  } = useQuery({
     queryKey: ["org-status", periodId ?? "current"],
     queryFn: () => checklistApi.orgStatus(periodId),
   });
+
+  const isLoading = itemsLoading || statusesLoading;
+  const isError = itemsError || statusesError;
 
   const { data: periods = [] } = useQuery({
     queryKey: ["checklist-periods"],
@@ -89,8 +98,8 @@ export default function ChecklistPage() {
   const jiraBaseUrl = org?.jira_base_url ?? null;
 
   const statusMap = new Map<string, OrgStatus>(statuses.map((s) => [s.canonical_id, s]));
-  const statusOf = (item: ChecklistItemDetail): DisplayStatus =>
-    (statusMap.get(item.id)?.status as DisplayStatus) ?? "untouched";
+  const statusOf = (item: ChecklistItemDetail): Status =>
+    (statusMap.get(item.id)?.status as Status) ?? "not_applicable";
 
   const { mutate: updateStatus } = useMutation({
     mutationFn: ({ canonicalId, status }: { canonicalId: string; status: Status }) =>
@@ -155,22 +164,44 @@ export default function ChecklistPage() {
 
   const toggleCollapse = (id: string) => toggleSetMember(setCollapsed, id);
 
-  const countForDoc = (dt: string | null) =>
-    allItems.filter(
-      (i) =>
-        (dt === null || i.documents.some((d) => d.doc_type === dt)) &&
-        (selectedCategoryIds.size === 0 ||
-          (i.category_id !== null && selectedCategoryIds.has(i.category_id))) &&
-        matchesQuery(i),
-    ).length;
+  // One pass over allItems per filter axis, memoized so typing in the search
+  // box or toggling a status dropdown doesn't re-scan the full list per chip.
+  const { docTypeCounts, docTypeTotal } = useMemo(() => {
+    const map = new Map<string, number>();
+    let total = 0;
+    for (const i of allItems) {
+      if (!matchesQuery(i)) continue;
+      if (
+        selectedCategoryIds.size > 0 &&
+        (i.category_id === null || !selectedCategoryIds.has(i.category_id))
+      )
+        continue;
+      total++;
+      for (const docType of new Set(i.documents.map((d) => d.doc_type))) {
+        map.set(docType, (map.get(docType) ?? 0) + 1);
+      }
+    }
+    return { docTypeCounts: map, docTypeTotal: total };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allItems, selectedCategoryIds, query]);
+
+  const { categoryCounts, categoryTotal } = useMemo(() => {
+    const map = new Map<string, number>();
+    let total = 0;
+    for (const i of allItems) {
+      if (!matchesQuery(i)) continue;
+      if (selectedDocTypes.size > 0 && !i.documents.some((d) => selectedDocTypes.has(d.doc_type)))
+        continue;
+      total++;
+      if (i.category_id) map.set(i.category_id, (map.get(i.category_id) ?? 0) + 1);
+    }
+    return { categoryCounts: map, categoryTotal: total };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allItems, selectedDocTypes, query]);
+
+  const countForDoc = (dt: string | null) => (dt === null ? docTypeTotal : docTypeCounts.get(dt) ?? 0);
   const countForCat = (cid: string | null) =>
-    allItems.filter(
-      (i) =>
-        (selectedDocTypes.size === 0 ||
-          i.documents.some((d) => selectedDocTypes.has(d.doc_type))) &&
-        (cid === null || i.category_id === cid) &&
-        matchesQuery(i),
-    ).length;
+    cid === null ? categoryTotal : categoryCounts.get(cid) ?? 0;
 
   return (
     <div style={{ padding: "2rem", maxWidth: 720, margin: "0 auto" }}>
@@ -182,7 +213,34 @@ export default function ChecklistPage() {
           marginBottom: "1rem",
         }}
       >
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>체크리스트</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>체크리스트</h1>
+          <button
+            onClick={() =>
+              exportChecklistToExcel(
+                items,
+                (item) => {
+                  const s = statusOf(item);
+                  return s === "not_applicable" ? null : statusLabel[s];
+                },
+                "체크리스트",
+                "체크리스트.xlsx",
+              )
+            }
+            style={{
+              padding: "0.4rem 0.9rem",
+              borderRadius: 8,
+              border: "1px solid #d1d5db",
+              background: "white",
+              color: "#374151",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            엑셀로 추출
+          </button>
+        </div>
         {!viewingPeriod && (
           <button
             onClick={() => setShowSaveForm((v) => !v)}
@@ -396,7 +454,11 @@ export default function ChecklistPage() {
         </div>
       )}
 
-      {groups.length === 0 ? (
+      {isLoading ? (
+        <p style={{ color: "#6b7280" }}>불러오는 중...</p>
+      ) : isError ? (
+        <p style={{ color: "#dc2626" }}>데이터를 불러오지 못했습니다. 새로고침 해주세요.</p>
+      ) : groups.length === 0 ? (
         <p style={{ color: "#6b7280" }}>
           {allItems.length === 0
             ? "항목이 없습니다. 문서를 먼저 업로드하세요."
@@ -551,20 +613,19 @@ function FilterChip({
   );
 }
 
-function checkboxGlyph(status: DisplayStatus) {
+function checkboxGlyph(status: Status) {
   if (status === "completed") return "✓";
   if (status === "not_applicable") return "–";
   if (status === "in_progress") return "●";
   return "";
 }
 
-function checkboxStyle(status: DisplayStatus): React.CSSProperties {
-  const palette: Record<DisplayStatus, { border: string; bg: string; fg: string }> = {
+function checkboxStyle(status: Status): React.CSSProperties {
+  const palette: Record<Status, { border: string; bg: string; fg: string }> = {
     completed: { border: "#16a34a", bg: "#16a34a", fg: "white" },
     in_progress: { border: "#ca8a04", bg: "white", fg: "#ca8a04" },
     not_applicable: { border: "#d1d5db", bg: "#f3f4f6", fg: "#9ca3af" },
     not_started: { border: "#9ca3af", bg: "white", fg: "white" },
-    untouched: { border: "#e5e7eb", bg: "#fafafa", fg: "white" },
   };
   const c = palette[status];
   return {
@@ -596,7 +657,7 @@ function ChecklistRow({
   onSelect,
 }: {
   item: ChecklistItemDetail;
-  status: DisplayStatus;
+  status: Status;
   jiraKey: string | null;
   jiraBaseUrl: string | null;
   isOpen: boolean;
@@ -695,7 +756,7 @@ function ChecklistRow({
           target="_blank"
           rel="noreferrer"
           style={{
-            marginLeft: item.doc_type ? 0 : "auto",
+            marginLeft: item.documents.length > 0 ? 0 : "auto",
             padding: "0.15rem 0.5rem",
             borderRadius: 4,
             background: "#eff6ff",
