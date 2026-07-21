@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -8,6 +8,7 @@ import {
   type JiraConnectInput,
   type OrgStatus,
 } from "@/api/compliance";
+import { exportChecklistToExcel } from "@/lib/exportExcel";
 
 const STATUS_OPTIONS = ["not_started", "in_progress", "completed", "not_applicable"] as const;
 type Status = (typeof STATUS_OPTIONS)[number];
@@ -41,7 +42,11 @@ export default function ChecklistPage() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [openStatusFor, setOpenStatusFor] = useState<string | null>(null);
 
-  const { data: allItems = [] } = useQuery({
+  const {
+    data: allItems = [],
+    isLoading: itemsLoading,
+    isError: itemsError,
+  } = useQuery({
     queryKey: ["checklist-items"],
     queryFn: () => checklistApi.list(),
   });
@@ -71,10 +76,17 @@ export default function ChecklistPage() {
       matchesQuery(i),
   );
 
-  const { data: statuses = [] } = useQuery({
+  const {
+    data: statuses = [],
+    isLoading: statusesLoading,
+    isError: statusesError,
+  } = useQuery({
     queryKey: ["org-status", periodId ?? "current"],
     queryFn: () => checklistApi.orgStatus(periodId),
   });
+
+  const isLoading = itemsLoading || statusesLoading;
+  const isError = itemsError || statusesError;
 
   const { data: periods = [] } = useQuery({
     queryKey: ["checklist-periods"],
@@ -155,22 +167,44 @@ export default function ChecklistPage() {
 
   const toggleCollapse = (id: string) => toggleSetMember(setCollapsed, id);
 
-  const countForDoc = (dt: string | null) =>
-    allItems.filter(
-      (i) =>
-        (dt === null || i.documents.some((d) => d.doc_type === dt)) &&
-        (selectedCategoryIds.size === 0 ||
-          (i.category_id !== null && selectedCategoryIds.has(i.category_id))) &&
-        matchesQuery(i),
-    ).length;
+  // One pass over allItems per filter axis, memoized so typing in the search
+  // box or toggling a status dropdown doesn't re-scan the full list per chip.
+  const { docTypeCounts, docTypeTotal } = useMemo(() => {
+    const map = new Map<string, number>();
+    let total = 0;
+    for (const i of allItems) {
+      if (!matchesQuery(i)) continue;
+      if (
+        selectedCategoryIds.size > 0 &&
+        (i.category_id === null || !selectedCategoryIds.has(i.category_id))
+      )
+        continue;
+      total++;
+      for (const docType of new Set(i.documents.map((d) => d.doc_type))) {
+        map.set(docType, (map.get(docType) ?? 0) + 1);
+      }
+    }
+    return { docTypeCounts: map, docTypeTotal: total };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allItems, selectedCategoryIds, query]);
+
+  const { categoryCounts, categoryTotal } = useMemo(() => {
+    const map = new Map<string, number>();
+    let total = 0;
+    for (const i of allItems) {
+      if (!matchesQuery(i)) continue;
+      if (selectedDocTypes.size > 0 && !i.documents.some((d) => selectedDocTypes.has(d.doc_type)))
+        continue;
+      total++;
+      if (i.category_id) map.set(i.category_id, (map.get(i.category_id) ?? 0) + 1);
+    }
+    return { categoryCounts: map, categoryTotal: total };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allItems, selectedDocTypes, query]);
+
+  const countForDoc = (dt: string | null) => (dt === null ? docTypeTotal : docTypeCounts.get(dt) ?? 0);
   const countForCat = (cid: string | null) =>
-    allItems.filter(
-      (i) =>
-        (selectedDocTypes.size === 0 ||
-          i.documents.some((d) => selectedDocTypes.has(d.doc_type))) &&
-        (cid === null || i.category_id === cid) &&
-        matchesQuery(i),
-    ).length;
+    cid === null ? categoryTotal : categoryCounts.get(cid) ?? 0;
 
   return (
     <div style={{ padding: "2rem", maxWidth: 720, margin: "0 auto" }}>
@@ -182,7 +216,34 @@ export default function ChecklistPage() {
           marginBottom: "1rem",
         }}
       >
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>체크리스트</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>체크리스트</h1>
+          <button
+            onClick={() =>
+              exportChecklistToExcel(
+                items,
+                (item) => {
+                  const s = statusOf(item);
+                  return s === "not_applicable" ? null : statusLabel[s];
+                },
+                "체크리스트",
+                "체크리스트.xlsx",
+              )
+            }
+            style={{
+              padding: "0.4rem 0.9rem",
+              borderRadius: 8,
+              border: "1px solid #d1d5db",
+              background: "white",
+              color: "#374151",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            엑셀로 추출
+          </button>
+        </div>
         {!viewingPeriod && (
           <button
             onClick={() => setShowSaveForm((v) => !v)}
@@ -396,7 +457,11 @@ export default function ChecklistPage() {
         </div>
       )}
 
-      {groups.length === 0 ? (
+      {isLoading ? (
+        <p style={{ color: "#6b7280" }}>불러오는 중...</p>
+      ) : isError ? (
+        <p style={{ color: "#dc2626" }}>데이터를 불러오지 못했습니다. 새로고침 해주세요.</p>
+      ) : groups.length === 0 ? (
         <p style={{ color: "#6b7280" }}>
           {allItems.length === 0
             ? "항목이 없습니다. 문서를 먼저 업로드하세요."
@@ -695,7 +760,7 @@ function ChecklistRow({
           target="_blank"
           rel="noreferrer"
           style={{
-            marginLeft: item.doc_type ? 0 : "auto",
+            marginLeft: item.documents.length > 0 ? 0 : "auto",
             padding: "0.15rem 0.5rem",
             borderRadius: 4,
             background: "#eff6ff",
