@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   checklistApi,
@@ -7,8 +8,6 @@ import {
   type JiraConnectInput,
   type OrgStatus,
 } from "@/api/compliance";
-
-const DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001";
 
 const STATUS_OPTIONS = ["not_started", "in_progress", "completed", "not_applicable"] as const;
 type Status = (typeof STATUS_OPTIONS)[number];
@@ -33,7 +32,7 @@ interface CategoryGroup {
 
 export default function ChecklistPage() {
   const qc = useQueryClient();
-  const [orgId] = useState(DEFAULT_ORG_ID);
+  const { periodId } = useParams<{ periodId?: string }>();
   const [selectedDocTypes, setSelectedDocTypes] = useState<Set<string>>(new Set());
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<Set<string>>(new Set());
   const [multiSelectDocType, setMultiSelectDocType] = useState(false);
@@ -73,13 +72,19 @@ export default function ChecklistPage() {
   );
 
   const { data: statuses = [] } = useQuery({
-    queryKey: ["org-status", orgId],
-    queryFn: () => checklistApi.orgStatus(orgId),
+    queryKey: ["org-status", periodId ?? "current"],
+    queryFn: () => checklistApi.orgStatus(periodId),
   });
 
+  const { data: periods = [] } = useQuery({
+    queryKey: ["checklist-periods"],
+    queryFn: () => checklistApi.periods(),
+  });
+  const viewingPeriod = periodId ? periods.find((p) => p.id === periodId) : undefined;
+
   const { data: org } = useQuery({
-    queryKey: ["org", orgId],
-    queryFn: () => orgApi.get(orgId),
+    queryKey: ["org"],
+    queryFn: () => orgApi.get(),
   });
   const jiraBaseUrl = org?.jira_base_url ?? null;
 
@@ -89,8 +94,25 @@ export default function ChecklistPage() {
 
   const { mutate: updateStatus } = useMutation({
     mutationFn: ({ canonicalId, status }: { canonicalId: string; status: Status }) =>
-      checklistApi.updateStatus(orgId, canonicalId, status),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["org-status", orgId] }),
+      checklistApi.updateStatus(canonicalId, status, undefined, periodId),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["org-status", periodId ?? "current"] }),
+  });
+
+  const [showSaveForm, setShowSaveForm] = useState(false);
+  const [saveLabel, setSaveLabel] = useState("");
+  const [saveStart, setSaveStart] = useState("");
+  const [saveEnd, setSaveEnd] = useState("");
+
+  const { mutate: savePeriod, isPending: isSaving } = useMutation({
+    mutationFn: () => checklistApi.savePeriod(saveLabel.trim(), saveStart || undefined, saveEnd || undefined),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["checklist-periods"] });
+      setShowSaveForm(false);
+      setSaveLabel("");
+      setSaveStart("");
+      setSaveEnd("");
+    },
   });
 
   const chipStyle = (active: boolean, accent = "#2563eb"): React.CSSProperties => ({
@@ -152,9 +174,135 @@ export default function ChecklistPage() {
 
   return (
     <div style={{ padding: "2rem", maxWidth: 720, margin: "0 auto" }}>
-      <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "1rem" }}>체크리스트</h1>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "1rem",
+        }}
+      >
+        <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>체크리스트</h1>
+        {!viewingPeriod && (
+          <button
+            onClick={() => setShowSaveForm((v) => !v)}
+            style={{
+              padding: "0.45rem 0.9rem",
+              borderRadius: 6,
+              border: "1px solid #2563eb",
+              background: "white",
+              color: "#2563eb",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            히스토리로 저장
+          </button>
+        )}
+      </div>
 
-      <JiraSettings orgId={orgId} />
+      {periodId && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.6rem",
+            padding: "0.6rem 0.9rem",
+            marginBottom: "1rem",
+            borderRadius: 8,
+            background: "#fffbeb",
+            border: "1px solid #fde68a",
+            fontSize: "0.82rem",
+            color: "#92400e",
+          }}
+        >
+          <span>
+            📅 <strong>{viewingPeriod?.label ?? "이전 기록"}</strong> 기간 보는 중 (현재 아님)
+          </span>
+          <Link to="/checklist" style={{ marginLeft: "auto", color: "#2563eb", fontWeight: 600 }}>
+            진행중 체크리스트로
+          </Link>
+        </div>
+      )}
+
+      {showSaveForm && !viewingPeriod && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+            alignItems: "flex-end",
+            padding: "0.9rem 1rem",
+            marginBottom: "1.25rem",
+            borderRadius: 10,
+            border: "1px solid #dbeafe",
+            background: "#eff6ff",
+          }}
+        >
+          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.72rem", color: "#6b7280", fontWeight: 600 }}>
+            라벨
+            <input
+              type="text"
+              value={saveLabel}
+              onChange={(e) => setSaveLabel(e.target.value)}
+              placeholder="예: 2026년 7월 정기점검"
+              style={{ padding: "0.45rem 0.6rem", borderRadius: 6, border: "1px solid #d1d5db", fontSize: "0.82rem", minWidth: 200 }}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.72rem", color: "#6b7280", fontWeight: 600 }}>
+            시작일
+            <input
+              type="date"
+              value={saveStart}
+              onChange={(e) => setSaveStart(e.target.value)}
+              style={{ padding: "0.45rem 0.6rem", borderRadius: 6, border: "1px solid #d1d5db", fontSize: "0.82rem" }}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.72rem", color: "#6b7280", fontWeight: 600 }}>
+            종료일
+            <input
+              type="date"
+              value={saveEnd}
+              onChange={(e) => setSaveEnd(e.target.value)}
+              style={{ padding: "0.45rem 0.6rem", borderRadius: 6, border: "1px solid #d1d5db", fontSize: "0.82rem" }}
+            />
+          </label>
+          <button
+            disabled={!saveLabel.trim() || isSaving}
+            onClick={() => savePeriod()}
+            style={{
+              padding: "0.5rem 1rem",
+              borderRadius: 6,
+              border: "none",
+              background: !saveLabel.trim() || isSaving ? "#93c5fd" : "#2563eb",
+              color: "white",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              cursor: !saveLabel.trim() || isSaving ? "default" : "pointer",
+            }}
+          >
+            {isSaving ? "저장 중..." : "저장"}
+          </button>
+          <button
+            onClick={() => setShowSaveForm(false)}
+            style={{
+              padding: "0.5rem 1rem",
+              borderRadius: 6,
+              border: "1px solid #d1d5db",
+              background: "white",
+              color: "#374151",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            취소
+          </button>
+        </div>
+      )}
+
+      <JiraSettings />
 
       <input
         type="text"
@@ -572,11 +720,11 @@ const JIRA_DEFAULTS = {
   jira_project_key: "DDW",
 };
 
-function JiraSettings({ orgId }: { orgId: string }) {
+function JiraSettings() {
   const qc = useQueryClient();
   const { data: org } = useQuery({
-    queryKey: ["org", orgId],
-    queryFn: () => orgApi.get(orgId),
+    queryKey: ["org"],
+    queryFn: () => orgApi.get(),
   });
 
   const [editing, setEditing] = useState(false);
@@ -586,9 +734,9 @@ function JiraSettings({ orgId }: { orgId: string }) {
   const showForm = editing || !connected;
 
   const { mutate: save, isPending, isError } = useMutation({
-    mutationFn: (input: JiraConnectInput) => orgApi.connectJira(orgId, input),
+    mutationFn: (input: JiraConnectInput) => orgApi.connectJira(input),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["org", orgId] });
+      qc.invalidateQueries({ queryKey: ["org"] });
       setEditing(false);
       setForm((f) => ({ ...f, jira_api_token: "" }));
     },
@@ -599,8 +747,8 @@ function JiraSettings({ orgId }: { orgId: string }) {
     isPending: isSyncing,
     data: syncResult,
   } = useMutation({
-    mutationFn: () => checklistApi.syncJira(orgId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["org-status", orgId] }),
+    mutationFn: () => checklistApi.syncJira(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["org-status"] }),
   });
 
   const startEditing = () => {

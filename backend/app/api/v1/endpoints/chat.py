@@ -1,16 +1,24 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.models.compliance import User
 from app.schemas.compliance import ChatMessage, ChatResponse, ChatSource
 from app.services.rag import answer_with_rag
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(body: ChatMessage, db: AsyncSession = Depends(get_db)):
-    answer, clauses, articles = await answer_with_rag(db, body.message, body.source_type)
+async def chat(
+    body: ChatMessage,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    answer, clauses, articles = await answer_with_rag(
+        db, body.message, current_user.organization_id, body.source_type
+    )
     sources = [
         ChatSource(
             id=c.id,

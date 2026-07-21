@@ -85,6 +85,7 @@ class ChecklistItemDetail(BaseModel):
 class OrgStatusRead(BaseModel):
     id: uuid.UUID
     canonical_id: uuid.UUID
+    period_id: uuid.UUID
     status: str
     jira_key: str | None
     updated_at: datetime
@@ -95,6 +96,48 @@ class OrgStatusRead(BaseModel):
 class OrgStatusUpdate(BaseModel):
     status: str
     jira_key: str | None = None
+    period_id: uuid.UUID | None = None
+
+
+class ChecklistPeriodRead(BaseModel):
+    id: uuid.UUID
+    label: str
+    start_date: date | None
+    end_date: date | None
+    is_current: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ChecklistPeriodCreate(BaseModel):
+    label: str
+    start_date: date | None = None
+    end_date: date | None = None
+
+
+# Auth
+class SignupRequest(BaseModel):
+    org_name: str
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class UserRead(BaseModel):
+    id: uuid.UUID
+    email: str
+
+    model_config = {"from_attributes": True}
 
 
 # Organization / Jira connection
@@ -106,6 +149,11 @@ class OrganizationRead(BaseModel):
     jira_project_key: str | None
     jira_connected: bool  # true when all required Jira fields are set (token never returned)
     updated_at: datetime
+
+
+class AuthMeResponse(BaseModel):
+    user: UserRead
+    organization: OrganizationRead
 
 
 class OrganizationJiraUpdate(BaseModel):

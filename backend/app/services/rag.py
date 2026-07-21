@@ -1,10 +1,20 @@
+import uuid
 from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.compliance import CanonicalItem, CanonicalMap, Category, Clause, Embedding, LawArticle
+from app.models.compliance import (
+    CanonicalItem,
+    CanonicalMap,
+    Category,
+    Clause,
+    Document,
+    Embedding,
+    Law,
+    LawArticle,
+)
 from app.services.upstage import chat_completion, embed_text
 
 SourceType = Literal["clause", "law_article", "all"]
@@ -26,6 +36,7 @@ RELEVANCE_MAX_DISTANCE = 0.63
 async def search_similar_clauses(
     db: AsyncSession,
     query: str,
+    organization_id: uuid.UUID,
     top_k: int = 5,
     source_type: SourceType = "all",
     max_distance: float = RELEVANCE_MAX_DISTANCE,
@@ -36,8 +47,9 @@ async def search_similar_clauses(
     stmt = (
         select(Clause)
         .options(selectinload(Clause.document))
+        .join(Document, Document.id == Clause.document_id)
         .join(Embedding, (Embedding.source_id == Clause.id) & (Embedding.source_type == "clause"))
-        .where(distance < max_distance)
+        .where(distance < max_distance, Document.organization_id == organization_id)
         .order_by(distance)
         .limit(top_k)
     )
@@ -51,6 +63,7 @@ async def search_similar_clauses(
 async def search_similar_articles(
     db: AsyncSession,
     query: str,
+    organization_id: uuid.UUID,
     top_k: int = 5,
     max_distance: float = RELEVANCE_MAX_DISTANCE,
 ) -> list[LawArticle]:
@@ -60,8 +73,9 @@ async def search_similar_articles(
     result = await db.execute(
         select(LawArticle)
         .options(selectinload(LawArticle.law))
+        .join(Law, Law.id == LawArticle.law_id)
         .join(Embedding, (Embedding.source_id == LawArticle.id) & (Embedding.source_type == "law_article"))
-        .where(distance < max_distance)
+        .where(distance < max_distance, Law.organization_id == organization_id)
         .order_by(distance)
         .limit(top_k)
     )
@@ -71,6 +85,7 @@ async def search_similar_articles(
 async def find_similar_canonical_items(
     db: AsyncSession,
     query_vec: list[float],
+    organization_id: uuid.UUID,
     top_k: int = 3,
     max_distance: float = DUPLICATE_CANDIDATE_MAX_DISTANCE,
 ) -> list[dict]:
@@ -92,7 +107,7 @@ async def find_similar_canonical_items(
         .join(CanonicalMap, CanonicalMap.canonical_id == CanonicalItem.id)
         .join(Embedding, (Embedding.source_id == CanonicalMap.clause_id) & (Embedding.source_type == "clause"))
         .outerjoin(Category, Category.id == CanonicalItem.category_id)
-        .where(distance < max_distance)
+        .where(distance < max_distance, CanonicalItem.organization_id == organization_id)
         .order_by(distance)
         .limit(top_k * 3)  # over-fetch, then dedupe by canonical id below
     )
@@ -113,6 +128,7 @@ async def find_similar_canonical_items(
 async def answer_with_rag(
     db: AsyncSession,
     question: str,
+    organization_id: uuid.UUID,
     source_type: SourceType = "all",
 ) -> tuple[str, list[Clause], list[LawArticle]]:
     clauses: list[Clause] = []
@@ -120,7 +136,7 @@ async def answer_with_rag(
     context_parts: list[str] = []
 
     if source_type in ("clause", "all"):
-        clauses = await search_similar_clauses(db, question, top_k=3, source_type="clause")
+        clauses = await search_similar_clauses(db, question, organization_id, top_k=3, source_type="clause")
         context_parts.extend(
             f"[{c.document.doc_type if c.document else '문서'} {c.clause_no}] {c.requirement}"
             for c in clauses
@@ -128,7 +144,7 @@ async def answer_with_rag(
         )
 
     if source_type in ("law_article", "all"):
-        articles = await search_similar_articles(db, question, top_k=3)
+        articles = await search_similar_articles(db, question, organization_id, top_k=3)
         context_parts.extend(
             f"[{a.law.name if a.law else '법률'} {a.article_no}] {a.article_text}"
             for a in articles
