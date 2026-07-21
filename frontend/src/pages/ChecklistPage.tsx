@@ -12,15 +12,12 @@ import { exportChecklistToExcel } from "@/lib/exportExcel";
 
 const STATUS_OPTIONS = ["not_started", "in_progress", "completed", "not_applicable"] as const;
 type Status = (typeof STATUS_OPTIONS)[number];
-// "untouched" = no org_status row yet (nothing checked, no Jira ticket).
-type DisplayStatus = Status | "untouched";
 
-const statusLabel: Record<DisplayStatus, string> = {
-  untouched: "미설정",
-  not_started: "미시작",
-  in_progress: "진행중",
-  completed: "완료",
-  not_applicable: "해당없음",
+const statusLabel: Record<Status, string> = {
+  not_started: "진행 예정",
+  in_progress: "진행 중",
+  completed: "진행 완료",
+  not_applicable: "비활성화",
 };
 
 const UNCATEGORIZED_ID = "__uncategorized__";
@@ -101,8 +98,8 @@ export default function ChecklistPage() {
   const jiraBaseUrl = org?.jira_base_url ?? null;
 
   const statusMap = new Map<string, OrgStatus>(statuses.map((s) => [s.canonical_id, s]));
-  const statusOf = (item: ChecklistItemDetail): DisplayStatus =>
-    (statusMap.get(item.id)?.status as DisplayStatus) ?? "untouched";
+  const statusOf = (item: ChecklistItemDetail): Status =>
+    (statusMap.get(item.id)?.status as Status) ?? "not_applicable";
 
   const { mutate: updateStatus } = useMutation({
     mutationFn: ({ canonicalId, status }: { canonicalId: string; status: Status }) =>
@@ -616,20 +613,19 @@ function FilterChip({
   );
 }
 
-function checkboxGlyph(status: DisplayStatus) {
+function checkboxGlyph(status: Status) {
   if (status === "completed") return "✓";
   if (status === "not_applicable") return "–";
   if (status === "in_progress") return "●";
   return "";
 }
 
-function checkboxStyle(status: DisplayStatus): React.CSSProperties {
-  const palette: Record<DisplayStatus, { border: string; bg: string; fg: string }> = {
+function checkboxStyle(status: Status): React.CSSProperties {
+  const palette: Record<Status, { border: string; bg: string; fg: string }> = {
     completed: { border: "#16a34a", bg: "#16a34a", fg: "white" },
     in_progress: { border: "#ca8a04", bg: "white", fg: "#ca8a04" },
     not_applicable: { border: "#d1d5db", bg: "#f3f4f6", fg: "#9ca3af" },
     not_started: { border: "#9ca3af", bg: "white", fg: "white" },
-    untouched: { border: "#e5e7eb", bg: "#fafafa", fg: "white" },
   };
   const c = palette[status];
   return {
@@ -661,7 +657,7 @@ function ChecklistRow({
   onSelect,
 }: {
   item: ChecklistItemDetail;
-  status: DisplayStatus;
+  status: Status;
   jiraKey: string | null;
   jiraBaseUrl: string | null;
   isOpen: boolean;
