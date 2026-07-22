@@ -1,5 +1,6 @@
+import re
 import uuid
-from typing import Literal
+from typing import Literal, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,29 @@ from app.models.compliance import (
 from app.services.upstage import chat_completion, embed_text
 
 SourceType = Literal["clause", "law_article", "all"]
+
+T = TypeVar("T")
+
+# Clause numbers ("2.1.5", "1.1.2") and law article numbers ("제34조",
+# "제7조의2") — dense (embedding) search misses these because a bare number
+# carries no semantic content, and a Korean question glues particles onto it
+# with no space ("2.1.5는", "제34조가"), so even naive substring/tsvector
+# matching misses too. Extracting the number and comparing directly against
+# clause_no/article_no is the only approach proven correct so far.
+#
+# A broader keyword/tsvector fallback (matching arbitrary terms, not just
+# numbers) was tried and reverted: on off-topic questions like "GDPR
+# 요구사항 알려줘", generic OR-matching on common words ("요구사항") pulled in
+# unrelated clauses with no relevance threshold to filter them, regressing
+# the "no sources for off-topic questions" baseline behavior. Revisit only
+# if a real (non-number) retrieval miss is measured — same rule the 0.63
+# cosine threshold below was tuned under.
+CLAUSE_NO_RE = re.compile(r"\d+(?:\.\d+){1,2}")
+ARTICLE_NO_RE = re.compile(r"제\s?\d+조(?:의\s?\d+)?")
+
+# RRF fusion constant — smaller than the usual default (60, tuned for
+# thousands of candidates) since our corpus is only ~200 clauses/articles.
+RRF_K = 10
 
 # Cosine distance threshold for cross-document duplicate candidates.
 # Lower = stricter. 0.35 (~0.65 cosine similarity) is a starting point —
@@ -90,6 +114,71 @@ async def search_similar_articles(
     return list(result.scalars().all())
 
 
+async def search_clauses_by_keyword(
+    db: AsyncSession, query: str, organization_id: uuid.UUID, top_n: int = 10
+) -> list[Clause]:
+    """Exact-match lookup on clause numbers ("2.1.5") extracted from the
+    question by regex — catches what dense (embedding) search misses, since
+    a bare number carries no semantic content for the embedding model."""
+    results: list[Clause] = []
+    seen: set = set()
+
+    for no in CLAUSE_NO_RE.findall(query):
+        stmt = (
+            select(Clause)
+            .options(selectinload(Clause.document))
+            .join(Document, Document.id == Clause.document_id)
+            .where(Clause.clause_no == no, Document.organization_id == organization_id)
+        )
+        for c in (await db.execute(stmt)).scalars().all():
+            if c.id not in seen:
+                seen.add(c.id)
+                results.append(c)
+
+    return results[:top_n]
+
+
+async def search_articles_by_keyword(
+    db: AsyncSession, query: str, organization_id: uuid.UUID, top_n: int = 10
+) -> list[LawArticle]:
+    """Same as search_clauses_by_keyword, for law articles ("제34조")."""
+    results: list[LawArticle] = []
+    seen: set = set()
+
+    for no in ARTICLE_NO_RE.findall(query):
+        no = no.replace(" ", "")
+        stmt = (
+            select(LawArticle)
+            .options(selectinload(LawArticle.law))
+            .join(Law, Law.id == LawArticle.law_id)
+            .where(LawArticle.article_no == no, Law.organization_id == organization_id)
+        )
+        for a in (await db.execute(stmt)).scalars().all():
+            if a.id not in seen:
+                seen.add(a.id)
+                results.append(a)
+
+    return results[:top_n]
+
+
+def _rrf_merge(dense_ranked: list[T], sparse_ranked: list[T], top_k: int = 3, k: int = RRF_K) -> list[T]:
+    """Reciprocal Rank Fusion: combine two ranked lists using rank position
+    only (not raw scores), since cosine distance and ts_rank live on
+    unrelated scales. score(item) = sum of 1/(k + rank) across lists it
+    appears in — an item ranked highly in either list, or moderately in
+    both, rises to the top."""
+    scores: dict = {}
+    by_id: dict = {}
+    for rank, item in enumerate(dense_ranked, start=1):
+        scores[item.id] = scores.get(item.id, 0.0) + 1 / (k + rank)
+        by_id[item.id] = item
+    for rank, item in enumerate(sparse_ranked, start=1):
+        scores[item.id] = scores.get(item.id, 0.0) + 1 / (k + rank)
+        by_id[item.id] = item
+    ordered_ids = sorted(scores, key=lambda i: scores[i], reverse=True)
+    return [by_id[i] for i in ordered_ids[:top_k]]
+
+
 async def find_similar_canonical_items(
     db: AsyncSession,
     query_vec: list[float],
@@ -150,7 +239,9 @@ async def answer_with_rag(
     context_parts: list[str] = []
 
     if source_type in ("clause", "all"):
-        clauses = await search_similar_clauses(db, question, organization_id, top_k=3, source_type="clause")
+        dense_clauses = await search_similar_clauses(db, question, organization_id, top_k=10, source_type="clause")
+        sparse_clauses = await search_clauses_by_keyword(db, question, organization_id, top_n=10)
+        clauses = _rrf_merge(dense_clauses, sparse_clauses, top_k=3)
         context_parts.extend(
             f"[{c.document.doc_type if c.document else '문서'} {c.clause_no}] {c.requirement}"
             for c in clauses
@@ -158,7 +249,9 @@ async def answer_with_rag(
         )
 
     if source_type in ("law_article", "all"):
-        articles = await search_similar_articles(db, question, organization_id, top_k=3)
+        dense_articles = await search_similar_articles(db, question, organization_id, top_k=10)
+        sparse_articles = await search_articles_by_keyword(db, question, organization_id, top_n=10)
+        articles = _rrf_merge(dense_articles, sparse_articles, top_k=3)
         context_parts.extend(
             f"[{a.law.name if a.law else '법률'} {a.article_no}] {a.article_text}"
             for a in articles

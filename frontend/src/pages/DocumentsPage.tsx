@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { documentsApi } from "@/api/compliance";
+import { documentsApi, withParseTimeoutRetry } from "@/api/compliance";
 
 type UploadStatus = "idle" | "creating" | "parsing" | "solar" | "success" | "error";
 
@@ -78,7 +78,7 @@ export default function DocumentsPage() {
       const formData = new FormData();
       formData.append("file", file);
       setStatus("solar");
-      const result = await documentsApi.upload(doc.id, formData);
+      const result = await withParseTimeoutRetry(() => documentsApi.upload(doc.id, formData));
 
       setStatus("success");
       setMessage(

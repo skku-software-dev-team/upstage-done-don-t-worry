@@ -60,9 +60,17 @@ class CategoryRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DepartmentRead(BaseModel):
+    id: uuid.UUID
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
 class CanonicalItemRead(BaseModel):
     id: uuid.UUID
     category_id: uuid.UUID | None
+    department_id: uuid.UUID | None
     merged_title: str
 
     model_config = {"from_attributes": True}
@@ -84,6 +92,8 @@ class ChecklistItemDetail(BaseModel):
     merged_title: str
     category_id: uuid.UUID | None
     category_name: str | None
+    department_id: uuid.UUID | None
+    department_name: str | None
     documents: list[ChecklistDocRef]
 
 

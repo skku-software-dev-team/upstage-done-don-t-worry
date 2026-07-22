@@ -3,6 +3,7 @@ import DocumentsPage from "@/pages/DocumentsPage";
 import LawsPage from "@/pages/LawsPage";
 import ChecklistPage from "@/pages/ChecklistPage";
 import HistoryPage from "@/pages/HistoryPage";
+import ProgressPage from "@/pages/ProgressPage";
 import ChatPage from "@/pages/ChatPage";
 import LoginPage from "@/pages/LoginPage";
 import SignupPage from "@/pages/SignupPage";
@@ -54,6 +55,9 @@ function Header() {
           </NavLink>
           <NavLink to="/checklist" style={({ isActive }) => navStyle(isActive)}>
             체크리스트
+          </NavLink>
+          <NavLink to="/progress" style={({ isActive }) => navStyle(isActive)}>
+            진행상황
           </NavLink>
           <NavLink to="/history" style={({ isActive }) => navStyle(isActive)}>
             히스토리
@@ -108,6 +112,7 @@ export default function App() {
               <Route path="/members" element={<ProtectedRoute><MembersPage /></ProtectedRoute>} />
               <Route path="/laws" element={<ProtectedRoute><LawsPage /></ProtectedRoute>} />
               <Route path="/checklist" element={<ProtectedRoute><ChecklistPage /></ProtectedRoute>} />
+              <Route path="/progress" element={<ProtectedRoute><ProgressPage /></ProtectedRoute>} />
               <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
               <Route path="/history/:periodId" element={<ProtectedRoute><ChecklistPage /></ProtectedRoute>} />
               <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />

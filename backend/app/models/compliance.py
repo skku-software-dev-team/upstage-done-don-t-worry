@@ -32,6 +32,15 @@ class Category(Base):
     canonical_items: Mapped[list["CanonicalItem"]] = relationship(back_populates="category")
 
 
+class Department(Base):
+    __tablename__ = "departments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+
+    canonical_items: Mapped[list["CanonicalItem"]] = relationship(back_populates="department")
+
+
 class Clause(Base):
     __tablename__ = "clauses"
 
@@ -65,9 +74,11 @@ class CanonicalItem(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"))
     category_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("categories.id"))
+    department_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("departments.id"))
     merged_title: Mapped[str] = mapped_column(Text, nullable=False)
 
     category: Mapped["Category | None"] = relationship(back_populates="canonical_items")
+    department: Mapped["Department | None"] = relationship(back_populates="canonical_items")
     canonical_maps: Mapped[list["CanonicalMap"]] = relationship(back_populates="canonical_item", cascade="all, delete-orphan")
     org_statuses: Mapped[list["OrgStatus"]] = relationship(back_populates="canonical_item", cascade="all, delete-orphan")
 

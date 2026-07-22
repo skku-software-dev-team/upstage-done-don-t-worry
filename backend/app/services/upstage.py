@@ -8,6 +8,16 @@ from app.core.config import settings
 
 UPSTAGE_BASE_URL = "https://api.upstage.ai/v1"
 
+# For structured-generation task calls (generate_checklist_items,
+# assign_departments_batch) — deliberately does NOT mention "no context,
+# refuse" like chat_completion's default system prompts do. Those tasks
+# always carry their own full instructions in the user message; this system
+# prompt only needs to keep Solar from adding commentary around the JSON.
+TASK_SYSTEM_PROMPT = (
+    "당신은 정보보호 인증 전문가입니다. 사용자 메시지의 지시를 정확히 따르고, "
+    "요청된 형식(JSON 등)으로만 응답하세요. 그 외의 설명이나 거절 문구를 덧붙이지 마세요."
+)
+
 
 async def embed_text(text: str, is_query: bool = False) -> list[float]:
     """Embed text with Solar. Use embedding-passage for stored docs,
@@ -35,26 +45,37 @@ async def embed_text(text: str, is_query: bool = False) -> list[float]:
         return resp.json()["data"][0]["embedding"]
 
 
-async def chat_completion(messages: list[dict], context: str = "") -> str:
-    if context:
-        system_prompt = (
-            "당신은 정보보호 인증(ISMS-P, CSAP, ISO27001) 전문 어시스턴트입니다. "
-            "반드시 아래 '참고 조항'에 있는 내용만을 근거로 답변하세요. "
-            "참고 조항에 없는 인증기준, 해외 법령, 일반 상식은 언급하지 마세요. "
-            "참고 조항만으로 답할 수 없으면 모른다고 답하고, 어떤 문서를 추가로 "
-            "업로드하면 좋을지 안내하세요. "
-            "참고 조항은 각각 [문서명 조항번호] 형식으로 시작합니다 — 답변에서 이 내용을 "
-            "언급할 때마다 어느 문서의 몇 번 조항인지 그 표기를 그대로 살려서 "
-            "예: '[ISMS-P 2.4.1]에 따르면...' 처럼 문장 안에 명시하세요. "
-            "출처가 불명확한 조항번호만 단독으로 쓰지 마세요.\n\n"
-            f"참고 조항:\n{context}"
-        )
-    else:
-        system_prompt = (
-            "당신은 정보보호 인증 전문 어시스턴트입니다. "
-            "현재 업로드된 문서에서 관련 내용을 찾지 못했습니다. "
-            "일반 지식으로 답변하지 말고, 관련 인증기준 문서를 먼저 업로드해달라고 안내하세요."
-        )
+async def chat_completion(messages: list[dict], context: str = "", system_prompt: str | None = None) -> str:
+    """`context`/the default system prompts below are specifically for the RAG
+    chatbot (rag.answer_with_rag): "no context" there means retrieval found
+    nothing relevant, so Solar should refuse rather than hallucinate from
+    general knowledge. Callers doing something else entirely (structured
+    generation tasks like generate_checklist_items/assign_departments_batch,
+    which never have "context" in this sense) MUST pass their own
+    `system_prompt` — otherwise they get the "no context, refuse and ask for
+    an upload" instruction by default, which has nothing to do with their
+    actual task and made Solar intermittently refuse instead of returning
+    the requested JSON."""
+    if system_prompt is None:
+        if context:
+            system_prompt = (
+                "당신은 정보보호 인증(ISMS-P, CSAP, ISO27001) 전문 어시스턴트입니다. "
+                "반드시 아래 '참고 조항'에 있는 내용만을 근거로 답변하세요. "
+                "참고 조항에 없는 인증기준, 해외 법령, 일반 상식은 언급하지 마세요. "
+                "참고 조항만으로 답할 수 없으면 모른다고 답하고, 어떤 문서를 추가로 "
+                "업로드하면 좋을지 안내하세요. "
+                "참고 조항은 각각 [문서명 조항번호] 형식으로 시작합니다 — 답변에서 이 내용을 "
+                "언급할 때마다 어느 문서의 몇 번 조항인지 그 표기를 그대로 살려서 "
+                "예: '[ISMS-P 2.4.1]에 따르면...' 처럼 문장 안에 명시하세요. "
+                "출처가 불명확한 조항번호만 단독으로 쓰지 마세요.\n\n"
+                f"참고 조항:\n{context}"
+            )
+        else:
+            system_prompt = (
+                "당신은 정보보호 인증 전문 어시스턴트입니다. "
+                "현재 업로드된 문서에서 관련 내용을 찾지 못했습니다. "
+                "일반 지식으로 답변하지 말고, 관련 인증기준 문서를 먼저 업로드해달라고 안내하세요."
+            )
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -69,6 +90,20 @@ async def chat_completion(messages: list[dict], context: str = "") -> str:
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
+
+
+def is_transient_upstage_error(exc: BaseException) -> bool:
+    """True for Upstage-call failures (parse_document, chat_completion, ...)
+    worth retrying: Upstage's own async job reporting failure (observed
+    cause: their internal PDF-split service hitting its own timeout —
+    "context deadline exceeded" — under load), network-level timeouts, or a
+    5xx from Upstage. False for 4xx errors (bad file, auth, etc.) where
+    retrying the identical request won't help."""
+    if isinstance(exc, (RuntimeError, TimeoutError, httpx.TimeoutException, httpx.ConnectError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500:
+        return True
+    return False
 
 
 async def parse_document(file_bytes: bytes, filename: str) -> dict:
@@ -209,7 +244,7 @@ async def generate_checklist_items(
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요:
 {{"items": [{{"title": "항목명", "category": "카테고리명", "source": 조항번호, "matches_existing_id": "기존id 또는 null"}}, ...]}}"""
 
-    raw = await chat_completion([{"role": "user", "content": prompt}])
+    raw = await chat_completion([{"role": "user", "content": prompt}], system_prompt=TASK_SYSTEM_PROMPT)
     match = re.search(r'\{.*\}', raw, re.DOTALL)
     if not match:
         return []
@@ -218,3 +253,64 @@ async def generate_checklist_items(
         return data.get("items", [])
     except json.JSONDecodeError:
         return []
+
+
+async def assign_departments_batch(items: list[dict], departments: list[str]) -> dict[str, str]:
+    """Call Solar once to classify a batch of checklist items (each
+    {"id", "title", "category"}) into one of `departments`, based on title
+    and category. Returns {item_id: department_name} for whatever the
+    response covered (a missing id just means the caller should leave it
+    unassigned, not that something is wrong).
+
+    Deliberately per-batch rather than accepting the full item list and
+    looping internally: callers should chunk (~40 items) and commit each
+    batch's result before calling again — keeps every Solar call's
+    prompt/response small (avoiding the timeout risk a single huge call for
+    an entire org's checklist would carry) and makes a retry after a
+    mid-batch failure resume instead of redoing already-assigned items."""
+    if not items:
+        return {}
+
+    departments_text = "\n".join(f"- {d}" for d in departments)
+    lines = [
+        f"[{i + 1}] id={it['id']} | 카테고리={it['category']} | {it['title']}"
+        for i, it in enumerate(items)
+    ]
+    items_text = "\n".join(lines)
+
+    prompt = f"""당신은 조직 내 보안 컴플라이언스 담당 부서를 배정하는 전문가입니다.
+다음은 체크리스트 항목 목록입니다. 각 항목을 실제로 수행/책임질 가능성이 가장 높은
+부서 하나를 배정하세요. 카테고리 정보도 참고하되, 항목 제목이 더 구체적인 근거입니다.
+
+항목 목록 (총 {len(items)}개):
+{items_text}
+
+# 부서 (아래 목록에서만 선택)
+{departments_text}
+
+중요 규칙:
+- **각 항목([번호]) 하나당 부서를 정확히 하나씩 배정하세요.** 항목 개수와 결과
+  assignments 개수가 같아야 합니다.
+- department 값은 위 목록의 이름을 **글자 그대로, 띄어쓰기·특수문자까지 정확히** 복사하세요.
+- 목록에 없는 새로운 부서 이름을 만들지 마세요.
+- 각 결과에 해당 항목의 id를 그대로 포함하세요.
+
+반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요:
+{{"assignments": [{{"id": "항목id", "department": "부서명"}}, ...]}}"""
+
+    raw = await chat_completion([{"role": "user", "content": prompt}], system_prompt=TASK_SYSTEM_PROMPT)
+    match = re.search(r'\{.*\}', raw, re.DOTALL)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group())
+    except json.JSONDecodeError:
+        return {}
+
+    result: dict[str, str] = {}
+    for a in data.get("assignments", []):
+        item_id = a.get("id")
+        dept = (a.get("department") or "").strip()
+        if item_id and dept:
+            result[item_id] = dept
+    return result
