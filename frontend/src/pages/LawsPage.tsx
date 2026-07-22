@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { lawsApi } from "@/api/compliance";
+import { lawsApi, withParseTimeoutRetry } from "@/api/compliance";
 
 type UploadStatus = "idle" | "creating" | "parsing" | "linking" | "success" | "error";
 
@@ -70,7 +70,7 @@ export default function LawsPage() {
       const formData = new FormData();
       formData.append("file", file);
       setStatus("linking");
-      const result = await lawsApi.upload(law.id, formData);
+      const result = await withParseTimeoutRetry(() => lawsApi.upload(law.id, formData));
 
       setStatus("success");
       setMessage(

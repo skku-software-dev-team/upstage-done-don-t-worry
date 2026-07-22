@@ -1,4 +1,23 @@
+import axios from "axios";
 import client from "./client";
+
+// Upstage's Document Parse job occasionally fails on its own side (their
+// internal PDF-split service timing out under load) — the backend surfaces
+// this as 503 "document_parse_timeout" specifically so we know retrying the
+// identical request is worth it (unlike a 4xx, which would just fail again).
+// One retry only: each attempt can itself take minutes, so retrying more
+// would leave the user staring at a spinner for a very long time.
+export async function withParseTimeoutRetry<T>(uploadFn: () => Promise<T>): Promise<T> {
+  try {
+    return await uploadFn();
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 503) {
+      window.alert("Upstage 문서 처리 중 타임아웃이 발생했습니다. 잠시 후 자동으로 한 번 더 시도합니다.");
+      return await uploadFn();
+    }
+    throw err;
+  }
+}
 
 export interface Document {
   id: string;

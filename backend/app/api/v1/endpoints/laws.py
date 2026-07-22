@@ -9,7 +9,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.compliance import Clause, ClauseLawRef, Document, Embedding, Law, LawArticle, User
 from app.schemas.compliance import LawArticleRead, LawCreate, LawRead
-from app.services.upstage import embed_text, parse_document
+from app.services.upstage import embed_text, is_transient_parse_error, parse_document
 
 router = APIRouter(prefix="/laws", tags=["laws"], dependencies=[Depends(get_current_user)])
 
@@ -78,7 +78,12 @@ async def upload_law(
     law = await _get_owned_law(law_id, current_user.organization_id, db)
 
     content = await file.read()
-    parsed = await parse_document(content, file.filename or "law.pdf")
+    try:
+        parsed = await parse_document(content, file.filename or "law.pdf")
+    except Exception as e:
+        if is_transient_parse_error(e):
+            raise HTTPException(503, detail="document_parse_timeout") from e
+        raise
 
     md = (parsed.get("content") or {}).get("markdown", "").strip()
     if not md:
