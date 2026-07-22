@@ -55,12 +55,24 @@ export interface ChecklistDocRef {
   document_name: string;
 }
 
+export interface Department {
+  id: string;
+  name: string;
+}
+
 export interface ChecklistItemDetail {
   id: string;
   merged_title: string;
   category_id: string | null;
   category_name: string | null;
+  department_id: string | null;
+  department_name: string | null;
   documents: ChecklistDocRef[];
+}
+
+export interface AssignDepartmentsResult {
+  assigned: number;
+  remaining: number;
 }
 
 export interface OrgStatus {
@@ -155,16 +167,20 @@ export const documentsApi = {
 };
 
 export const checklistApi = {
-  list: (params?: { categoryId?: string; documentId?: string }) =>
+  list: (params?: { categoryId?: string; departmentId?: string; documentId?: string }) =>
     client
       .get<ChecklistItemDetail[]>("/checklist", {
         params: {
           category_id: params?.categoryId,
+          department_id: params?.departmentId,
           document_id: params?.documentId,
         },
       })
       .then((r) => r.data),
   categories: () => client.get<Category[]>("/checklist/categories").then((r) => r.data),
+  departments: () => client.get<Department[]>("/checklist/departments").then((r) => r.data),
+  assignDepartments: () =>
+    client.post<AssignDepartmentsResult>("/checklist/assign-departments").then((r) => r.data),
   orgStatus: (periodId?: string) =>
     client
       .get<OrgStatus[]>("/checklist/status", { params: { period_id: periodId } })

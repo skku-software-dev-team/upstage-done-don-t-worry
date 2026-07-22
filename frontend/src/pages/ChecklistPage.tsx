@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   checklistApi,
   orgApi,
+  withParseTimeoutRetry,
   type ChecklistItemDetail,
   type JiraConnectInput,
   type OrgStatus,
@@ -33,8 +34,10 @@ export default function ChecklistPage() {
   const { periodId } = useParams<{ periodId?: string }>();
   const [selectedDocTypes, setSelectedDocTypes] = useState<Set<string>>(new Set());
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<Set<string>>(new Set());
+  const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<Set<string>>(new Set());
   const [multiSelectDocType, setMultiSelectDocType] = useState(false);
   const [multiSelectCategory, setMultiSelectCategory] = useState(false);
+  const [multiSelectDepartment, setMultiSelectDepartment] = useState(false);
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [openStatusFor, setOpenStatusFor] = useState<string | null>(null);
@@ -60,6 +63,14 @@ export default function ChecklistPage() {
     ).entries(),
   ).sort((a, b) => a[1].localeCompare(b[1], "ko"));
 
+  const presentDepartments = Array.from(
+    new Map(
+      allItems
+        .filter((i) => i.department_id && i.department_name)
+        .map((i) => [i.department_id!, i.department_name!]),
+    ).entries(),
+  ).sort((a, b) => a[1].localeCompare(b[1], "ko"));
+
   const query = search.trim().toLowerCase();
   const matchesQuery = (i: ChecklistItemDetail) =>
     query === "" || i.merged_title.toLowerCase().includes(query);
@@ -70,6 +81,8 @@ export default function ChecklistPage() {
         i.documents.some((d) => selectedDocTypes.has(d.doc_type))) &&
       (selectedCategoryIds.size === 0 ||
         (i.category_id !== null && selectedCategoryIds.has(i.category_id))) &&
+      (selectedDepartmentIds.size === 0 ||
+        (i.department_id !== null && selectedDepartmentIds.has(i.department_id))) &&
       matchesQuery(i),
   );
 
@@ -106,6 +119,22 @@ export default function ChecklistPage() {
       checklistApi.updateStatus(canonicalId, status, undefined, periodId),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: ["org-status", periodId ?? "current"] }),
+  });
+
+  // On-demand (not run during upload) — see checklist.py's assign-departments
+  // for why: piling another whole-checklist Solar call onto the already
+  // timeout-prone upload flow would only make that worse.
+  const { mutate: assignDepartments, isPending: isAssigningDepartments } = useMutation({
+    mutationFn: () => withParseTimeoutRetry(() => checklistApi.assignDepartments()),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ["checklist-items"] });
+      window.alert(
+        result.remaining === 0
+          ? `부서 배정 완료: ${result.assigned}건 배정됨`
+          : `${result.assigned}건 배정됨, ${result.remaining}건은 이번에 배정하지 못했습니다. 버튼을 다시 눌러 재시도해주세요.`,
+      );
+    },
+    onError: () => window.alert("부서 배정에 실패했습니다. 다시 시도해주세요."),
   });
 
   const [showSaveForm, setShowSaveForm] = useState(false);
@@ -176,6 +205,11 @@ export default function ChecklistPage() {
         (i.category_id === null || !selectedCategoryIds.has(i.category_id))
       )
         continue;
+      if (
+        selectedDepartmentIds.size > 0 &&
+        (i.department_id === null || !selectedDepartmentIds.has(i.department_id))
+      )
+        continue;
       total++;
       for (const docType of new Set(i.documents.map((d) => d.doc_type))) {
         map.set(docType, (map.get(docType) ?? 0) + 1);
@@ -183,7 +217,7 @@ export default function ChecklistPage() {
     }
     return { docTypeCounts: map, docTypeTotal: total };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allItems, selectedCategoryIds, query]);
+  }, [allItems, selectedCategoryIds, selectedDepartmentIds, query]);
 
   const { categoryCounts, categoryTotal } = useMemo(() => {
     const map = new Map<string, number>();
@@ -192,16 +226,42 @@ export default function ChecklistPage() {
       if (!matchesQuery(i)) continue;
       if (selectedDocTypes.size > 0 && !i.documents.some((d) => selectedDocTypes.has(d.doc_type)))
         continue;
+      if (
+        selectedDepartmentIds.size > 0 &&
+        (i.department_id === null || !selectedDepartmentIds.has(i.department_id))
+      )
+        continue;
       total++;
       if (i.category_id) map.set(i.category_id, (map.get(i.category_id) ?? 0) + 1);
     }
     return { categoryCounts: map, categoryTotal: total };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allItems, selectedDocTypes, query]);
+  }, [allItems, selectedDocTypes, selectedDepartmentIds, query]);
+
+  const { departmentCounts, departmentTotal } = useMemo(() => {
+    const map = new Map<string, number>();
+    let total = 0;
+    for (const i of allItems) {
+      if (!matchesQuery(i)) continue;
+      if (selectedDocTypes.size > 0 && !i.documents.some((d) => selectedDocTypes.has(d.doc_type)))
+        continue;
+      if (
+        selectedCategoryIds.size > 0 &&
+        (i.category_id === null || !selectedCategoryIds.has(i.category_id))
+      )
+        continue;
+      total++;
+      if (i.department_id) map.set(i.department_id, (map.get(i.department_id) ?? 0) + 1);
+    }
+    return { departmentCounts: map, departmentTotal: total };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allItems, selectedDocTypes, selectedCategoryIds, query]);
 
   const countForDoc = (dt: string | null) => (dt === null ? docTypeTotal : docTypeCounts.get(dt) ?? 0);
   const countForCat = (cid: string | null) =>
     cid === null ? categoryTotal : categoryCounts.get(cid) ?? 0;
+  const countForDept = (did: string | null) =>
+    did === null ? departmentTotal : departmentCounts.get(did) ?? 0;
 
   return (
     <div style={{ padding: "2rem", maxWidth: 720, margin: "0 auto" }}>
@@ -240,6 +300,25 @@ export default function ChecklistPage() {
           >
             엑셀로 추출
           </button>
+          {!viewingPeriod && (
+            <button
+              onClick={() => assignDepartments()}
+              disabled={isAssigningDepartments}
+              title="부서가 아직 배정되지 않은 항목들에 담당 부서를 자동으로 배정합니다"
+              style={{
+                padding: "0.4rem 0.9rem",
+                borderRadius: 8,
+                border: "1px solid #d1d5db",
+                background: isAssigningDepartments ? "#f3f4f6" : "white",
+                color: "#374151",
+                fontSize: "0.82rem",
+                fontWeight: 600,
+                cursor: isAssigningDepartments ? "default" : "pointer",
+              }}
+            >
+              {isAssigningDepartments ? "부서 배정 중..." : "부서 배정"}
+            </button>
+          )}
         </div>
         {!viewingPeriod && (
           <button
@@ -447,6 +526,44 @@ export default function ChecklistPage() {
                   multiSelectCategory
                     ? toggleSetMember(setSelectedCategoryIds, id)
                     : setSelectedCategoryIds(new Set([id]))
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {presentDepartments.length > 0 && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: 6 }}>
+            <span style={{ fontSize: "0.72rem", color: "#9ca3af", fontWeight: 600 }}>
+              부서
+            </span>
+            <MultiSelectToggle
+              checked={multiSelectDepartment}
+              onChange={(checked) => {
+                setMultiSelectDepartment(checked);
+                setSelectedDepartmentIds(new Set());
+              }}
+            />
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+            <button
+              style={chipStyle(selectedDepartmentIds.size === 0, "#7c3aed")}
+              onClick={() => setSelectedDepartmentIds(new Set())}
+            >
+              전체 ({countForDept(null)})
+            </button>
+            {presentDepartments.map(([id, name]) => (
+              <FilterChip
+                key={id}
+                label={`${name} (${countForDept(id)})`}
+                active={selectedDepartmentIds.has(id)}
+                accent="#7c3aed"
+                onClick={() =>
+                  multiSelectDepartment
+                    ? toggleSetMember(setSelectedDepartmentIds, id)
+                    : setSelectedDepartmentIds(new Set([id]))
                 }
               />
             ))}
@@ -728,8 +845,23 @@ function ChecklistRow({
         {item.merged_title}
       </span>
 
-      {item.documents.length > 0 && (
+      {(item.documents.length > 0 || item.department_name) && (
         <span style={{ marginLeft: "auto", display: "flex", gap: "0.3rem" }}>
+          {item.department_name && (
+            <span
+              style={{
+                padding: "0.15rem 0.55rem",
+                borderRadius: 4,
+                background: "#f5f3ff",
+                color: "#6d28d9",
+                fontSize: "0.7rem",
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {item.department_name}
+            </span>
+          )}
           {item.documents.map((d) => (
             <span
               key={d.document_id}
