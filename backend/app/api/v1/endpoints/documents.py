@@ -15,10 +15,11 @@ from app.models.compliance import (
     Clause,
     Document,
     Embedding,
+    OrgStatus,
     User,
 )
 from app.api.v1.endpoints.laws import link_new_clauses_to_laws
-from app.schemas.compliance import ClauseRead, DocumentCreate, DocumentRead
+from app.schemas.compliance import ClauseRead, DocumentActiveUpdate, DocumentCreate, DocumentRead
 from app.services.rag import find_similar_canonical_items
 from app.services.upstage import embed_text, generate_checklist_items, is_transient_upstage_error, parse_document
 
@@ -52,8 +53,28 @@ async def create_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    doc = Document(organization_id=current_user.organization_id, **body.model_dump())
+    data = body.model_dump(exclude={"supersedes_document_id"})
+    doc = Document(organization_id=current_user.organization_id, **data)
     db.add(doc)
+
+    if body.supersedes_document_id is not None:
+        old_doc = await _get_owned_document(body.supersedes_document_id, current_user.organization_id, db)
+        old_doc.is_active = False
+
+    await db.commit()
+    await db.refresh(doc)
+    return doc
+
+
+@router.patch("/{doc_id}/active", response_model=DocumentRead)
+async def set_document_active(
+    doc_id: uuid.UUID,
+    body: DocumentActiveUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    doc = await _get_owned_document(doc_id, current_user.organization_id, db)
+    doc.is_active = body.is_active
     await db.commit()
     await db.refresh(doc)
     return doc
@@ -87,13 +108,21 @@ async def delete_document(
     # mapped to a canonical item, that item would otherwise be left behind as
     # an orphan (never shown as deletable, but still counted/re-duplicated on
     # the next upload).
+    #
+    # Only sweep up items with NO org_status anywhere (never checked off in any
+    # period) — org_status.canonical_id is ON DELETE CASCADE, so deleting a
+    # CanonicalItem that already has history would silently wipe checklist
+    # completion records from past (already-saved) periods, not just the
+    # current one.
     orphaned_ids = (
         await db.execute(
             select(CanonicalItem.id)
             .outerjoin(CanonicalMap, CanonicalMap.canonical_id == CanonicalItem.id)
+            .outerjoin(OrgStatus, OrgStatus.canonical_id == CanonicalItem.id)
             .where(
                 CanonicalItem.organization_id == current_user.organization_id,
                 CanonicalMap.canonical_id.is_(None),
+                OrgStatus.canonical_id.is_(None),
             )
         )
     ).scalars().all()

@@ -2,8 +2,9 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -79,7 +80,30 @@ async def list_canonical_items(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # canonical_item → category/department (name) and → clause → document (doc_type)
+    # A revised guideline supersedes its old document (Document.is_active=False)
+    # instead of deleting it, so history stays intact. The "current" checklist
+    # should still hide an item once every document it came from has been
+    # superseded — but only if it ever had a source at all; items preserved
+    # purely for org_status history (source document deleted outright) keep
+    # showing as before.
+    ActiveClause = aliased(Clause)
+    ActiveDocument = aliased(Document)
+    has_any_source = (
+        select(CanonicalMap.canonical_id)
+        .where(CanonicalMap.canonical_id == CanonicalItem.id)
+        .correlate(CanonicalItem)
+        .exists()
+    )
+    has_active_source = (
+        select(CanonicalMap.canonical_id)
+        .join(ActiveClause, ActiveClause.id == CanonicalMap.clause_id)
+        .join(ActiveDocument, ActiveDocument.id == ActiveClause.document_id)
+        .where(CanonicalMap.canonical_id == CanonicalItem.id, ActiveDocument.is_active.is_(True))
+        .correlate(CanonicalItem)
+        .exists()
+    )
+
+    # canonical_item → category (name) and → clause → document (doc_type)
     stmt = (
         select(
             CanonicalItem.id,
@@ -92,12 +116,15 @@ async def list_canonical_items(
             Document.doc_type,
             Document.name.label("document_name"),
         )
-        .where(CanonicalItem.organization_id == current_user.organization_id)
+        .where(
+            CanonicalItem.organization_id == current_user.organization_id,
+            or_(~has_any_source, has_active_source),
+        )
         .outerjoin(Category, Category.id == CanonicalItem.category_id)
         .outerjoin(Department, Department.id == CanonicalItem.department_id)
         .outerjoin(CanonicalMap, CanonicalMap.canonical_id == CanonicalItem.id)
         .outerjoin(Clause, Clause.id == CanonicalMap.clause_id)
-        .outerjoin(Document, Document.id == Clause.document_id)
+        .outerjoin(Document, (Document.id == Clause.document_id) & (Document.is_active.is_(True)))
         .order_by(Category.name, CanonicalItem.merged_title, Document.doc_type)
     )
     if category_id is not None:

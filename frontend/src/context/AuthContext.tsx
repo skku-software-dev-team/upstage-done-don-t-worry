@@ -9,6 +9,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (orgName: string, email: string, password: string) => Promise<void>;
+  acceptInvite: (token: string, email: string, password: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -52,6 +53,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await loadMe();
   };
 
+  const acceptInvite = async (token: string, email: string, password: string) => {
+    const { access_token } = await authApi.acceptInvite(token, email, password);
+    localStorage.setItem(TOKEN_STORAGE_KEY, access_token);
+    await loadMe();
+  };
+
   const logout = () => {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     setUser(null);
@@ -60,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, organization, isLoading, isAuthenticated: !!user, login, signup, logout }}
+      value={{ user, organization, isLoading, isAuthenticated: !!user, login, signup, acceptInvite, logout }}
     >
       {children}
     </AuthContext.Provider>

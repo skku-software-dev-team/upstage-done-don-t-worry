@@ -3,6 +3,7 @@ import client from "./client";
 export interface AuthUser {
   id: string;
   email: string;
+  role: "admin" | "member";
 }
 
 export interface AuthOrganization {
@@ -32,5 +33,9 @@ export const authApi = {
       .then((r) => r.data),
   login: (email: string, password: string) =>
     client.post<TokenResponse>("/auth/login", { email, password }).then((r) => r.data),
+  acceptInvite: (token: string, email: string, password: string) =>
+    client
+      .post<TokenResponse>("/auth/accept-invite", { token, email, password })
+      .then((r) => r.data),
   me: () => client.get<AuthMeResponse>("/auth/me").then((r) => r.data),
 };

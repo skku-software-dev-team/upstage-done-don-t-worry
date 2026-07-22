@@ -12,6 +12,7 @@ export default function LawsPage() {
   const [name, setName] = useState("");
   const [version, setVersion] = useState("");
   const [enactedDate, setEnactedDate] = useState("");
+  const [supersedesId, setSupersedesId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [status, setStatus] = useState<UploadStatus>("idle");
@@ -22,8 +23,16 @@ export default function LawsPage() {
     queryFn: lawsApi.list,
   });
 
+  const activeLaws = laws.filter((l) => l.is_active);
+
   const { mutate: deleteLaw } = useMutation({
     mutationFn: (lawId: string) => lawsApi.delete(lawId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["laws"] }),
+  });
+
+  const { mutate: setActive } = useMutation({
+    mutationFn: ({ lawId, isActive }: { lawId: string; isActive: boolean }) =>
+      lawsApi.setActive(lawId, isActive),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["laws"] }),
   });
 
@@ -50,6 +59,7 @@ export default function LawsPage() {
     setName("");
     setVersion("");
     setEnactedDate("");
+    setSupersedesId("");
     setFile(null);
     setStatus("idle");
     setMessage("");
@@ -64,6 +74,7 @@ export default function LawsPage() {
         name: name.trim(),
         version: version.trim(),
         enacted_date: enactedDate || null,
+        supersedes_law_id: supersedesId || undefined,
       });
 
       setStatus("parsing");
@@ -156,6 +167,23 @@ export default function LawsPage() {
                 style={inputStyle}
               />
             </div>
+          </div>
+
+          {/* Supersedes (optional) */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>대체할 기존 법령 (개정된 경우, 선택)</label>
+            <select
+              value={supersedesId}
+              onChange={(e) => setSupersedesId(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="">없음 (신규 법령)</option>
+              {activeLaws.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name} ({l.version})
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Drop zone */}
@@ -280,12 +308,13 @@ export default function LawsPage() {
               <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>법률명</th>
               <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>버전</th>
               <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>시행일</th>
+              <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>상태</th>
               <th style={{ padding: "0.75rem 1rem", width: 60 }} />
             </tr>
           </thead>
           <tbody>
             {laws.map((law) => (
-              <tr key={law.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
+              <tr key={law.id} style={{ borderBottom: "1px solid #f3f4f6", opacity: law.is_active ? 1 : 0.6 }}>
                 <td style={{ padding: "0.75rem 1rem", fontWeight: 500, color: "#111827" }}>{law.name}</td>
                 <td style={{ padding: "0.75rem 1rem" }}>
                   <span style={{
@@ -301,6 +330,24 @@ export default function LawsPage() {
                 </td>
                 <td style={{ padding: "0.75rem 1rem", color: "#6b7280" }}>
                   {law.enacted_date ? new Date(law.enacted_date).toLocaleDateString("ko-KR") : "-"}
+                </td>
+                <td style={{ padding: "0.75rem 1rem" }}>
+                  <button
+                    onClick={() => setActive({ lawId: law.id, isActive: !law.is_active })}
+                    title={law.is_active ? "구버전으로 표시" : "다시 활성화"}
+                    style={{
+                      padding: "0.2rem 0.6rem",
+                      borderRadius: 999,
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "0.78rem",
+                      fontWeight: 600,
+                      background: law.is_active ? "#dcfce7" : "#f3f4f6",
+                      color: law.is_active ? "#16a34a" : "#6b7280",
+                    }}
+                  >
+                    {law.is_active ? "활성" : "구버전"}
+                  </button>
                 </td>
                 <td style={{ padding: "0.75rem 1rem" }}>
                   <button

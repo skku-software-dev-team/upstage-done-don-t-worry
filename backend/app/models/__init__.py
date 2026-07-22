@@ -9,6 +9,7 @@ from app.models.compliance import (  # noqa: F401
     Department,
     Document,
     Embedding,
+    Invite,
     Law,
     LawArticle,
     Organization,

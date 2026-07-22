@@ -24,6 +24,7 @@ export interface Document {
   name: string;
   doc_type: string;
   version: string;
+  is_active: boolean;
   created_at: string;
 }
 
@@ -110,6 +111,21 @@ export interface JiraConnectInput {
   jira_project_key: string;
 }
 
+export interface Member {
+  id: string;
+  email: string;
+  role: "admin" | "member";
+  created_at: string;
+}
+
+export interface Invite {
+  id: string;
+  token: string;
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+}
+
 export interface ChatSource {
   id: string;
   source_type: "clause" | "law_article";
@@ -136,6 +152,7 @@ export interface Law {
   name: string;
   version: string;
   enacted_date: string | null;
+  is_active: boolean;
 }
 
 export interface LawArticle {
@@ -153,9 +170,11 @@ export interface LawUploadResult {
 
 export const documentsApi = {
   list: () => client.get<Document[]>("/documents").then((r) => r.data),
-  create: (data: Pick<Document, "name" | "doc_type">) =>
+  create: (data: Pick<Document, "name" | "doc_type"> & { supersedes_document_id?: string }) =>
     client.post<Document>("/documents", data).then((r) => r.data),
   delete: (docId: string) => client.delete(`/documents/${docId}`),
+  setActive: (docId: string, isActive: boolean) =>
+    client.patch<Document>(`/documents/${docId}/active`, { is_active: isActive }).then((r) => r.data),
   clauses: (docId: string) =>
     client.get<Clause[]>(`/documents/${docId}/clauses`).then((r) => r.data),
   upload: (docId: string, formData: FormData) =>
@@ -212,13 +231,19 @@ export const orgApi = {
   get: () => client.get<Organization>("/org").then((r) => r.data),
   connectJira: (data: JiraConnectInput) =>
     client.put<Organization>("/org/jira", data).then((r) => r.data),
+  members: () => client.get<Member[]>("/org/members").then((r) => r.data),
+  invites: () => client.get<Invite[]>("/org/invites").then((r) => r.data),
+  createInvite: () => client.post<Invite>("/org/invites").then((r) => r.data),
+  revokeInvite: (inviteId: string) => client.delete(`/org/invites/${inviteId}`),
 };
 
 export const lawsApi = {
   list: () => client.get<Law[]>("/laws").then((r) => r.data),
-  create: (data: Pick<Law, "name" | "version" | "enacted_date">) =>
+  create: (data: Pick<Law, "name" | "version" | "enacted_date"> & { supersedes_law_id?: string }) =>
     client.post<Law>("/laws", data).then((r) => r.data),
   delete: (lawId: string) => client.delete(`/laws/${lawId}`),
+  setActive: (lawId: string, isActive: boolean) =>
+    client.patch<Law>(`/laws/${lawId}/active`, { is_active: isActive }).then((r) => r.data),
   articles: (lawId: string) =>
     client.get<LawArticle[]>(`/laws/${lawId}/articles`).then((r) => r.data),
   upload: (lawId: string, formData: FormData) =>

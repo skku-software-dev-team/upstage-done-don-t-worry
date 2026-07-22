@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.compliance import Clause, ClauseLawRef, Document, Embedding, Law, LawArticle, User
-from app.schemas.compliance import LawArticleRead, LawCreate, LawRead
+from app.schemas.compliance import LawActiveUpdate, LawArticleRead, LawCreate, LawRead
 from app.services.upstage import embed_text, is_transient_upstage_error, parse_document
 
 router = APIRouter(prefix="/laws", tags=["laws"], dependencies=[Depends(get_current_user)])
@@ -39,8 +39,28 @@ async def create_law(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    law = Law(organization_id=current_user.organization_id, **body.model_dump())
+    data = body.model_dump(exclude={"supersedes_law_id"})
+    law = Law(organization_id=current_user.organization_id, **data)
     db.add(law)
+
+    if body.supersedes_law_id is not None:
+        old_law = await _get_owned_law(body.supersedes_law_id, current_user.organization_id, db)
+        old_law.is_active = False
+
+    await db.commit()
+    await db.refresh(law)
+    return law
+
+
+@router.patch("/{law_id}/active", response_model=LawRead)
+async def set_law_active(
+    law_id: uuid.UUID,
+    body: LawActiveUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    law = await _get_owned_law(law_id, current_user.organization_id, db)
+    law.is_active = body.is_active
     await db.commit()
     await db.refresh(law)
     return law

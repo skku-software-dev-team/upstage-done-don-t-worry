@@ -11,6 +11,7 @@ export default function DocumentsPage() {
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [docType, setDocType] = useState("");
+  const [supersedesId, setSupersedesId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [status, setStatus] = useState<UploadStatus>("idle");
@@ -21,8 +22,16 @@ export default function DocumentsPage() {
     queryFn: documentsApi.list,
   });
 
+  const activeDocs = docs.filter((d) => d.is_active);
+
   const { mutate: deleteDoc } = useMutation({
     mutationFn: (docId: string) => documentsApi.delete(docId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["documents"] }),
+  });
+
+  const { mutate: setActive } = useMutation({
+    mutationFn: ({ docId, isActive }: { docId: string; isActive: boolean }) =>
+      documentsApi.setActive(docId, isActive),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["documents"] }),
   });
 
@@ -48,6 +57,7 @@ export default function DocumentsPage() {
   const resetForm = () => {
     setName("");
     setDocType("");
+    setSupersedesId("");
     setFile(null);
     setStatus("idle");
     setMessage("");
@@ -58,7 +68,11 @@ export default function DocumentsPage() {
     if (!name.trim() || !docType.trim() || !file) return;
     try {
       setStatus("creating");
-      const doc = await documentsApi.create({ name: name.trim(), doc_type: docType });
+      const doc = await documentsApi.create({
+        name: name.trim(),
+        doc_type: docType,
+        supersedes_document_id: supersedesId || undefined,
+      });
 
       setStatus("parsing");
       const formData = new FormData();
@@ -144,6 +158,23 @@ export default function DocumentsPage() {
             </div>
           </div>
 
+          {/* Supersedes (optional) */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={labelStyle}>대체할 기존 문서 (개정판인 경우, 선택)</label>
+            <select
+              value={supersedesId}
+              onChange={(e) => setSupersedesId(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="">없음 (신규 문서)</option>
+              {activeDocs.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.doc_type})
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Drop zone */}
           <div
             onClick={() => !isUploading && fileInputRef.current?.click()}
@@ -212,7 +243,7 @@ export default function DocumentsPage() {
                   {status === "creating" ? "문서 생성" : status === "parsing" ? "Document AI 파싱" : "Solar 체크리스트 생성"}
                 </span>
                 <span>
-                  {status === "creating" ? "1 / 3" : status === "parsing" ? "2 / 3" : "3 / 3"}
+                  {status === "creating" ? "20 / 100" : status === "parsing" ? "55 / 100" : "90 / 100"}
                 </span>
               </div>
               <div style={{ height: 6, background: "#e5e7eb", borderRadius: 99, overflow: "hidden" }}>
@@ -266,12 +297,13 @@ export default function DocumentsPage() {
               <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>문서명</th>
               <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>유형</th>
               <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>등록일</th>
+              <th style={{ padding: "0.75rem 1rem", fontWeight: 600 }}>상태</th>
               <th style={{ padding: "0.75rem 1rem", width: 60 }} />
             </tr>
           </thead>
           <tbody>
             {docs.map((doc) => (
-              <tr key={doc.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
+              <tr key={doc.id} style={{ borderBottom: "1px solid #f3f4f6", opacity: doc.is_active ? 1 : 0.6 }}>
                 <td style={{ padding: "0.75rem 1rem", fontWeight: 500, color: "#111827" }}>{doc.name}</td>
                 <td style={{ padding: "0.75rem 1rem" }}>
                   <span style={{
@@ -287,6 +319,24 @@ export default function DocumentsPage() {
                 </td>
                 <td style={{ padding: "0.75rem 1rem", color: "#6b7280" }}>
                   {new Date(doc.created_at).toLocaleDateString("ko-KR")}
+                </td>
+                <td style={{ padding: "0.75rem 1rem" }}>
+                  <button
+                    onClick={() => setActive({ docId: doc.id, isActive: !doc.is_active })}
+                    title={doc.is_active ? "구버전으로 표시" : "다시 활성화"}
+                    style={{
+                      padding: "0.2rem 0.6rem",
+                      borderRadius: 999,
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "0.78rem",
+                      fontWeight: 600,
+                      background: doc.is_active ? "#dcfce7" : "#f3f4f6",
+                      color: doc.is_active ? "#16a34a" : "#6b7280",
+                    }}
+                  >
+                    {doc.is_active ? "활성" : "구버전"}
+                  </button>
                 </td>
                 <td style={{ padding: "0.75rem 1rem" }}>
                   <button
