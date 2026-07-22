@@ -49,7 +49,11 @@ async def search_similar_clauses(
         .options(selectinload(Clause.document))
         .join(Document, Document.id == Clause.document_id)
         .join(Embedding, (Embedding.source_id == Clause.id) & (Embedding.source_type == "clause"))
-        .where(distance < max_distance, Document.organization_id == organization_id)
+        .where(
+            distance < max_distance,
+            Document.organization_id == organization_id,
+            Document.is_active.is_(True),
+        )
         .order_by(distance)
         .limit(top_k)
     )
@@ -75,7 +79,11 @@ async def search_similar_articles(
         .options(selectinload(LawArticle.law))
         .join(Law, Law.id == LawArticle.law_id)
         .join(Embedding, (Embedding.source_id == LawArticle.id) & (Embedding.source_type == "law_article"))
-        .where(distance < max_distance, Law.organization_id == organization_id)
+        .where(
+            distance < max_distance,
+            Law.organization_id == organization_id,
+            Law.is_active.is_(True),
+        )
         .order_by(distance)
         .limit(top_k)
     )
@@ -95,6 +103,12 @@ async def find_similar_canonical_items(
 
     Returns compact dicts (id/title/category) meant to be shown to Solar as
     candidates, instead of the full canonical_items list.
+
+    Deliberately not filtered by Document.is_active: when a revised guideline
+    is uploaded and the old one gets deactivated, this is what lets Solar match
+    the new clause back onto the same canonical item instead of forking a
+    duplicate — keeping the checklist item (and its status history) continuous
+    across the version change.
     """
     distance = Embedding.embedding.cosine_distance(query_vec)
     stmt = (

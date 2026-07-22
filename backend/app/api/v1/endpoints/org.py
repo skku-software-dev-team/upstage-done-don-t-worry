@@ -1,13 +1,19 @@
-from fastapi import APIRouter, Depends
+import secrets
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_admin_user, get_current_user
 from app.core.database import get_db
-from app.models.compliance import Organization, User
-from app.schemas.compliance import OrganizationJiraUpdate, OrganizationRead
+from app.models.compliance import Invite, Organization, User
+from app.schemas.compliance import InviteRead, MemberRead, OrganizationJiraUpdate, OrganizationRead
 from app.services import jira
 
 router = APIRouter(prefix="/org", tags=["org"], dependencies=[Depends(get_current_user)])
+
+INVITE_EXPIRE_DAYS = 7
 
 
 def _to_read(org: Organization) -> OrganizationRead:
@@ -48,3 +54,48 @@ async def connect_jira(
     await db.commit()
     await db.refresh(org)
     return _to_read(org)
+
+
+@router.get("/members", response_model=list[MemberRead])
+async def list_members(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.scalars(
+        select(User).where(User.organization_id == current_user.organization_id).order_by(User.created_at)
+    )
+    return list(result.all())
+
+
+@router.get("/invites", response_model=list[InviteRead])
+async def list_invites(current_user: User = Depends(get_current_admin_user), db: AsyncSession = Depends(get_db)):
+    result = await db.scalars(
+        select(Invite)
+        .where(Invite.organization_id == current_user.organization_id)
+        .order_by(Invite.created_at.desc())
+    )
+    return list(result.all())
+
+
+@router.post("/invites", response_model=InviteRead, status_code=201)
+async def create_invite(current_user: User = Depends(get_current_admin_user), db: AsyncSession = Depends(get_db)):
+    invite = Invite(
+        organization_id=current_user.organization_id,
+        token=secrets.token_urlsafe(24),
+        created_by_id=current_user.id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=INVITE_EXPIRE_DAYS),
+    )
+    db.add(invite)
+    await db.commit()
+    await db.refresh(invite)
+    return invite
+
+
+@router.delete("/invites/{invite_id}", status_code=204)
+async def revoke_invite(
+    invite_id: str,
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    invite = await db.get(Invite, invite_id)
+    if invite is None or invite.organization_id != current_user.organization_id:
+        raise HTTPException(status_code=404, detail="초대를 찾을 수 없습니다.")
+    await db.delete(invite)
+    await db.commit()

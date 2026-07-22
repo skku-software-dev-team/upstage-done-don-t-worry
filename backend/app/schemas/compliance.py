@@ -11,14 +11,19 @@ class DocumentBase(BaseModel):
 
 
 class DocumentCreate(DocumentBase):
-    pass
+    supersedes_document_id: uuid.UUID | None = None
 
 
 class DocumentRead(DocumentBase):
     id: uuid.UUID
+    is_active: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class DocumentActiveUpdate(BaseModel):
+    is_active: bool
 
 
 class ClauseBase(BaseModel):
@@ -136,6 +141,23 @@ class TokenResponse(BaseModel):
 class UserRead(BaseModel):
     id: uuid.UUID
     email: str
+    role: str
+
+    model_config = {"from_attributes": True}
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+    email: str
+    password: str
+
+
+class InviteRead(BaseModel):
+    id: uuid.UUID
+    token: str
+    expires_at: datetime
+    accepted_at: datetime | None
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -156,6 +178,15 @@ class AuthMeResponse(BaseModel):
     organization: OrganizationRead
 
 
+class MemberRead(BaseModel):
+    id: uuid.UUID
+    email: str
+    role: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class OrganizationJiraUpdate(BaseModel):
     jira_base_url: str
     jira_email: str
@@ -168,6 +199,7 @@ class LawCreate(BaseModel):
     name: str
     version: str
     enacted_date: date | None = None
+    supersedes_law_id: uuid.UUID | None = None
 
 
 class LawRead(BaseModel):
@@ -175,8 +207,13 @@ class LawRead(BaseModel):
     name: str
     version: str
     enacted_date: date | None
+    is_active: bool
 
     model_config = {"from_attributes": True}
+
+
+class LawActiveUpdate(BaseModel):
+    is_active: bool
 
 
 class LawArticleRead(BaseModel):

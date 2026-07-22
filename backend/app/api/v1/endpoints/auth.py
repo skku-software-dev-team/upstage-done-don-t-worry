@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
-from app.models.compliance import Organization, User
+from app.models.compliance import Invite, Organization, User
 from app.schemas.compliance import (
+    AcceptInviteRequest,
     AuthMeResponse,
     LoginRequest,
     OrganizationRead,
@@ -32,8 +35,34 @@ async def signup(body: SignupRequest, db: AsyncSession = Depends(get_db)):
         organization_id=org.id,
         email=body.email,
         hashed_password=hash_password(body.password),
+        role="admin",
     )
     db.add(user)
+    await db.commit()
+
+    return TokenResponse(access_token=create_access_token(user.id))
+
+
+@router.post("/accept-invite", response_model=TokenResponse, status_code=201)
+async def accept_invite(body: AcceptInviteRequest, db: AsyncSession = Depends(get_db)):
+    invite = await db.scalar(select(Invite).where(Invite.token == body.token))
+    if invite is None or invite.accepted_at is not None:
+        raise HTTPException(status_code=400, detail="유효하지 않은 초대 링크입니다.")
+    if invite.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="만료된 초대 링크입니다.")
+
+    existing = await db.scalar(select(User).where(User.email == body.email))
+    if existing is not None:
+        raise HTTPException(status_code=400, detail="이미 가입된 이메일입니다.")
+
+    user = User(
+        organization_id=invite.organization_id,
+        email=body.email,
+        hashed_password=hash_password(body.password),
+        role="member",
+    )
+    db.add(user)
+    invite.accepted_at = datetime.now(timezone.utc)
     await db.commit()
 
     return TokenResponse(access_token=create_access_token(user.id))

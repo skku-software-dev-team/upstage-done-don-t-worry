@@ -6,6 +6,8 @@ import HistoryPage from "@/pages/HistoryPage";
 import ChatPage from "@/pages/ChatPage";
 import LoginPage from "@/pages/LoginPage";
 import SignupPage from "@/pages/SignupPage";
+import AcceptInvitePage from "@/pages/AcceptInvitePage";
+import MembersPage from "@/pages/MembersPage";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { ChatProvider } from "@/context/ChatContext";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
@@ -59,6 +61,9 @@ function Header() {
           <NavLink to="/chat" style={({ isActive }) => navStyle(isActive)}>
             AI 도우미
           </NavLink>
+          <NavLink to="/members" style={({ isActive }) => navStyle(isActive)}>
+            멤버
+          </NavLink>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "0.9rem" }}>
             {organization && (
               <span style={{ fontSize: "0.82rem", color: "#6b7280", fontWeight: 600 }}>
@@ -98,7 +103,9 @@ export default function App() {
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route path="/signup" element={<SignupPage />} />
+              <Route path="/invite/:token" element={<AcceptInvitePage />} />
               <Route path="/" element={<ProtectedRoute><DocumentsPage /></ProtectedRoute>} />
+              <Route path="/members" element={<ProtectedRoute><MembersPage /></ProtectedRoute>} />
               <Route path="/laws" element={<ProtectedRoute><LawsPage /></ProtectedRoute>} />
               <Route path="/checklist" element={<ProtectedRoute><ChecklistPage /></ProtectedRoute>} />
               <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />

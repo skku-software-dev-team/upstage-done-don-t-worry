@@ -8,6 +8,7 @@ from app.models.compliance import (  # noqa: F401
     ClauseLawRef,
     Document,
     Embedding,
+    Invite,
     Law,
     LawArticle,
     Organization,
