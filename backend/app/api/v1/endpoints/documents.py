@@ -20,7 +20,7 @@ from app.models.compliance import (
 from app.api.v1.endpoints.laws import link_new_clauses_to_laws
 from app.schemas.compliance import ClauseRead, DocumentCreate, DocumentRead
 from app.services.rag import find_similar_canonical_items
-from app.services.upstage import embed_text, generate_checklist_items, is_transient_parse_error, parse_document
+from app.services.upstage import embed_text, generate_checklist_items, is_transient_upstage_error, parse_document
 
 # Cap on concurrent Upstage embedding calls during upload, so a large document
 # doesn't fire 100+ simultaneous requests and trip rate limits.
@@ -127,7 +127,7 @@ async def upload_and_parse(
     try:
         parsed = await parse_document(content, file.filename or "upload.pdf")
     except Exception as e:
-        if is_transient_parse_error(e):
+        if is_transient_upstage_error(e):
             raise HTTPException(503, detail="document_parse_timeout") from e
         raise
 

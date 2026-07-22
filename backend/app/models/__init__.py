@@ -6,6 +6,7 @@ from app.models.compliance import (  # noqa: F401
     ChecklistPeriod,
     Clause,
     ClauseLawRef,
+    Department,
     Document,
     Embedding,
     Law,
