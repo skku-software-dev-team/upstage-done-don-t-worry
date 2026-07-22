@@ -71,6 +71,19 @@ async def chat_completion(messages: list[dict], context: str = "") -> str:
         return resp.json()["choices"][0]["message"]["content"]
 
 
+def is_transient_parse_error(exc: BaseException) -> bool:
+    """True for parse_document() failures worth retrying: Upstage's own async
+    job reporting failure (observed cause: their internal PDF-split service
+    hitting its own timeout — "context deadline exceeded" — under load),
+    network-level timeouts, or a 5xx from Upstage. False for 4xx errors
+    (bad file, auth, etc.) where retrying the identical request won't help."""
+    if isinstance(exc, (RuntimeError, TimeoutError, httpx.TimeoutException, httpx.ConnectError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500:
+        return True
+    return False
+
+
 async def parse_document(file_bytes: bytes, filename: str) -> dict:
     """Document Parse API — uses async endpoint for large files, falls back to sync for small ones.
     Always returns a dict with an 'elements' key."""
