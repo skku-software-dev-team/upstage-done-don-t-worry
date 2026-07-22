@@ -92,6 +92,36 @@ async def chat_completion(messages: list[dict], context: str = "", system_prompt
         return resp.json()["choices"][0]["message"]["content"]
 
 
+async def chat_completion_with_tools(
+    messages: list[dict], tools: list[dict], system_prompt: str
+) -> dict:
+    """Like chat_completion, but drives Solar's OpenAI-compatible tool-calling:
+    returns the raw assistant message dict (may carry `content`, `tool_calls`,
+    or both) instead of a plain string, so the caller can run a tool-call loop
+    — execute whatever the model asked for, append a `role: tool` message per
+    call, and re-invoke this until the model stops calling tools."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{UPSTAGE_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {settings.upstage_api_key}"},
+            json={
+                "model": "solar-pro",
+                "messages": [{"role": "system", "content": system_prompt}, *messages],
+                # Lower than chat_completion's 0.3 — this path grounds answers in
+                # tool results rather than generating creatively, and Solar was
+                # observed to occasionally fabricate plausible-looking clause
+                # citations instead of using the real retrieved ones; lower
+                # temperature measurably reduced (did not eliminate) that.
+                "temperature": 0.1,
+                "tools": tools,
+                "tool_choice": "auto",
+            },
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]
+
+
 def is_transient_upstage_error(exc: BaseException) -> bool:
     """True for Upstage-call failures (parse_document, chat_completion, ...)
     worth retrying: Upstage's own async job reporting failure (observed
