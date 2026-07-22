@@ -114,7 +114,7 @@ export default function App() {
               <Route path="/checklist" element={<ProtectedRoute><ChecklistPage /></ProtectedRoute>} />
               <Route path="/progress" element={<ProtectedRoute><ProgressPage /></ProtectedRoute>} />
               <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
-              <Route path="/history/:periodId" element={<ProtectedRoute><ChecklistPage /></ProtectedRoute>} />
+              <Route path="/history/:periodId" element={<ProtectedRoute><ProgressPage /></ProtectedRoute>} />
               <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
             </Routes>
           </ChatProvider>
