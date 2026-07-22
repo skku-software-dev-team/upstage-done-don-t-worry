@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { checklistApi, type ChecklistItemDetail, type OrgStatus } from "@/api/compliance";
 import { exportChecklistToExcel } from "@/lib/exportExcel";
@@ -29,8 +30,14 @@ function progressBucketOf(status: Status): ProgressStatus | null {
 
 export default function ProgressPage() {
   const qc = useQueryClient();
+  const { periodId } = useParams<{ periodId?: string }>();
   const [openStatusFor, setOpenStatusFor] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<ProgressStatus>>(new Set());
+  // History snapshots start read-only — editing a past record shouldn't be
+  // one accidental click away. Only relevant when viewing a saved period
+  // (periodId set); the live/current view is always freely editable.
+  const [editMode, setEditMode] = useState(false);
+  const locked = Boolean(periodId) && !editMode;
 
   const toggleCollapse = (s: ProgressStatus) =>
     setCollapsed((prev) => {
@@ -54,9 +61,15 @@ export default function ProgressPage() {
     isLoading: statusesLoading,
     isError: statusesError,
   } = useQuery({
-    queryKey: ["org-status", "current"],
-    queryFn: () => checklistApi.orgStatus(),
+    queryKey: ["org-status", periodId ?? "current"],
+    queryFn: () => checklistApi.orgStatus(periodId),
   });
+
+  const { data: periods = [] } = useQuery({
+    queryKey: ["checklist-periods"],
+    queryFn: () => checklistApi.periods(),
+  });
+  const viewingPeriod = periodId ? periods.find((p) => p.id === periodId) : undefined;
 
   const isLoading = itemsLoading || statusesLoading;
   const isError = itemsError || statusesError;
@@ -67,8 +80,8 @@ export default function ProgressPage() {
 
   const { mutate: updateStatus } = useMutation({
     mutationFn: ({ canonicalId, status }: { canonicalId: string; status: Status }) =>
-      checklistApi.updateStatus(canonicalId, status),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["org-status", "current"] }),
+      checklistApi.updateStatus(canonicalId, status, undefined, periodId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["org-status", periodId ?? "current"] }),
   });
 
   const buckets: Record<ProgressStatus, ChecklistItemDetail[]> = {
@@ -97,15 +110,42 @@ export default function ProgressPage() {
         }
       `}</style>
 
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem" }}>
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>진행상황</h1>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "0.75rem",
+          marginBottom: "1.5rem",
+          padding: periodId ? "0.75rem 1rem" : 0,
+          borderRadius: periodId ? 10 : 0,
+          background: periodId ? "#fffbeb" : "transparent",
+          border: periodId ? "1px solid #fde68a" : "none",
+        }}
+      >
+        <h1
+          style={{
+            fontSize: "1.5rem",
+            fontWeight: 700,
+            margin: 0,
+            color: periodId ? "#92400e" : "#111827",
+          }}
+        >
+          {periodId ? `📅 ${viewingPeriod?.label ?? "이전 기록"} 스냅샷` : "진행상황"}
+        </h1>
+        {periodId && (
+          <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "#92400e" }}>
+            (현재 아님)
+          </span>
+        )}
+
         <button
           className="no-print"
           onClick={() => window.print()}
           style={{
             padding: "0.4rem 0.9rem",
             borderRadius: 8,
-            border: "1px solid #d1d5db",
+            border: `1px solid ${periodId ? "#fde68a" : "#d1d5db"}`,
             background: "white",
             color: "#374151",
             fontSize: "0.82rem",
@@ -131,7 +171,7 @@ export default function ProgressPage() {
           style={{
             padding: "0.4rem 0.9rem",
             borderRadius: 8,
-            border: "1px solid #d1d5db",
+            border: `1px solid ${periodId ? "#fde68a" : "#d1d5db"}`,
             background: "white",
             color: "#374151",
             fontSize: "0.82rem",
@@ -141,6 +181,31 @@ export default function ProgressPage() {
         >
           엑셀로 추출
         </button>
+
+        {periodId && (
+          <>
+            <button
+              className="no-print"
+              onClick={() => setEditMode((v) => !v)}
+              style={{
+                marginLeft: "auto",
+                padding: "0.4rem 0.9rem",
+                borderRadius: 8,
+                border: `1px solid ${editMode ? "#b45309" : "#d97706"}`,
+                background: editMode ? "#fde68a" : "white",
+                color: "#92400e",
+                fontSize: "0.82rem",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {editMode ? "🔓 수정 중 (잠그기)" : "🔒 수정하기"}
+            </button>
+            <Link className="no-print" to="/progress" style={{ color: "#2563eb", fontWeight: 600, fontSize: "0.82rem" }}>
+              현재 진행상황으로
+            </Link>
+          </>
+        )}
       </div>
 
       {isLoading ? (
@@ -246,6 +311,7 @@ export default function ProgressPage() {
                             key={item.id}
                             item={item}
                             status={statusOf(item)}
+                            locked={locked}
                             isOpen={openStatusFor === item.id}
                             onToggleOpen={() =>
                               setOpenStatusFor(openStatusFor === item.id ? null : item.id)
@@ -306,12 +372,14 @@ function checkboxStyle(status: Status): React.CSSProperties {
 function ProgressRow({
   item,
   status,
+  locked = false,
   isOpen,
   onToggleOpen,
   onSelect,
 }: {
   item: ChecklistItemDetail;
   status: Status;
+  locked?: boolean;
   isOpen: boolean;
   onToggleOpen: () => void;
   onSelect: (status: Status) => void;
@@ -327,11 +395,20 @@ function ProgressRow({
       }}
     >
       <div style={{ position: "relative" }}>
-        <button onClick={onToggleOpen} style={checkboxStyle(status)}>
+        <button
+          onClick={locked ? undefined : onToggleOpen}
+          disabled={locked}
+          title={locked ? "잠겨있습니다 — 상단의 '수정하기'를 눌러야 변경할 수 있어요" : undefined}
+          style={{
+            ...checkboxStyle(status),
+            cursor: locked ? "not-allowed" : "pointer",
+            opacity: locked ? 0.6 : 1,
+          }}
+        >
           {checkboxGlyph(status)}
         </button>
 
-        {isOpen && (
+        {isOpen && !locked && (
           <>
             <div onClick={onToggleOpen} style={{ position: "fixed", inset: 0, zIndex: 20 }} />
             <div
@@ -380,8 +457,23 @@ function ProgressRow({
         {item.merged_title}
       </span>
 
-      {item.documents.length > 0 && (
+      {(item.documents.length > 0 || item.department_name) && (
         <span style={{ marginLeft: "auto", display: "flex", gap: "0.3rem" }}>
+          {item.department_name && (
+            <span
+              style={{
+                padding: "0.15rem 0.55rem",
+                borderRadius: 4,
+                background: "#f5f3ff",
+                color: "#6d28d9",
+                fontSize: "0.7rem",
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {item.department_name}
+            </span>
+          )}
           {item.documents.map((d) => (
             <span
               key={d.document_id}

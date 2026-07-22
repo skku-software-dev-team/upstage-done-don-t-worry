@@ -14,11 +14,6 @@ export default function HistoryPage() {
     queryFn: () => checklistApi.periods(),
   });
 
-  const { data: allItems = [] } = useQuery({
-    queryKey: ["checklist-items"],
-    queryFn: () => checklistApi.list(),
-  });
-
   const savedPeriods = periods.filter((p) => !p.is_current);
 
   const statusQueries = useQueries({
@@ -43,7 +38,12 @@ export default function HistoryPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           {savedPeriods.map((period, idx) => {
             const statuses = statusQueries[idx]?.data ?? [];
-            const doneCount = statuses.filter((s) => s.status === "completed").length;
+            // "비활성화"(not_applicable)는 준수 대상이 아니므로 진행률 분모에서 제외 —
+            // ProgressPage와 동일한 기준으로 맞춰서 "2/172"처럼 사실상 의미 없는
+            // 숫자가 아니라 실제 준수 대상 기준 진행률을 보여준다.
+            const applicable = statuses.filter((s) => s.status !== "not_applicable");
+            const doneCount = applicable.filter((s) => s.status === "completed").length;
+            const applicableTotal = applicable.length;
             const dateRange = formatDateRange(period.start_date, period.end_date);
             return (
               <Link
@@ -71,7 +71,7 @@ export default function HistoryPage() {
                       borderRadius: 999,
                     }}
                   >
-                    {doneCount}/{allItems.length} 완료
+                    {doneCount}/{applicableTotal} 완료
                   </span>
                 </div>
                 <div style={{ marginTop: "0.35rem", fontSize: "0.78rem", color: "#6b7280" }}>
