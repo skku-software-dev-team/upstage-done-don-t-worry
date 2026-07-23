@@ -54,7 +54,9 @@ export default function MembersPage() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
           <thead>
             <tr style={{ background: "#f9fafb", textAlign: "left" }}>
+              <th style={thStyle}>이름</th>
               <th style={thStyle}>이메일</th>
+              <th style={thStyle}>부서</th>
               <th style={thStyle}>역할</th>
               <th style={thStyle}>가입일</th>
             </tr>
@@ -62,7 +64,9 @@ export default function MembersPage() {
           <tbody>
             {members.map((m) => (
               <tr key={m.id} style={{ borderTop: "1px solid #f3f4f6" }}>
+                <td style={tdStyle}>{m.name ?? "-"}</td>
                 <td style={tdStyle}>{m.email}</td>
+                <td style={tdStyle}>{m.department_name ?? "-"}</td>
                 <td style={tdStyle}>
                   <span style={{
                     fontSize: "0.75rem",

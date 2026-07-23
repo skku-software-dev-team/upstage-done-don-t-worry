@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { authApi, type AuthDepartment } from "@/api/auth";
 
 export default function AcceptInvitePage() {
   const { token } = useParams<{ token: string }>();
@@ -8,8 +9,15 @@ export default function AcceptInvitePage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [departmentId, setDepartmentId] = useState("");
+  const [departments, setDepartments] = useState<AuthDepartment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    authApi.departments().then(setDepartments).catch(() => {});
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,7 +25,7 @@ export default function AcceptInvitePage() {
     setError(null);
     setIsSubmitting(true);
     try {
-      await acceptInvite(token, email, password);
+      await acceptInvite(token, email, password, name, departmentId || undefined);
       navigate("/checklist");
     } catch (err: unknown) {
       const detail =
@@ -48,6 +56,33 @@ export default function AcceptInvitePage() {
         <p style={{ fontSize: "0.85rem", color: "#6b7280", marginTop: "-0.5rem" }}>
           이메일과 비밀번호를 설정해 팀에 합류하세요.
         </p>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.8rem", color: "#6b7280", fontWeight: 600 }}>
+          이름
+          <input
+            type="text"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{ padding: "0.55rem 0.7rem", borderRadius: 6, border: "1px solid #d1d5db", fontSize: "0.9rem" }}
+          />
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.8rem", color: "#6b7280", fontWeight: 600 }}>
+          부서
+          <select
+            value={departmentId}
+            onChange={(e) => setDepartmentId(e.target.value)}
+            style={{ padding: "0.55rem 0.7rem", borderRadius: 6, border: "1px solid #d1d5db", fontSize: "0.9rem", background: "white" }}
+          >
+            <option value="">선택 안 함</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.8rem", color: "#6b7280", fontWeight: 600 }}>
           이메일

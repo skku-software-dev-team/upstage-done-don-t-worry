@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_admin_user, get_current_user
 from app.core.database import get_db
@@ -59,9 +60,22 @@ async def connect_jira(
 @router.get("/members", response_model=list[MemberRead])
 async def list_members(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.scalars(
-        select(User).where(User.organization_id == current_user.organization_id).order_by(User.created_at)
+        select(User)
+        .options(selectinload(User.department))
+        .where(User.organization_id == current_user.organization_id)
+        .order_by(User.created_at)
     )
-    return list(result.all())
+    return [
+        MemberRead(
+            id=u.id,
+            email=u.email,
+            name=u.name,
+            department_name=u.department.name if u.department else None,
+            role=u.role,
+            created_at=u.created_at,
+        )
+        for u in result.all()
+    ]
 
 
 @router.get("/invites", response_model=list[InviteRead])

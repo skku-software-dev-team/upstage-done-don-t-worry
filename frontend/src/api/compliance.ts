@@ -114,6 +114,8 @@ export interface JiraConnectInput {
 export interface Member {
   id: string;
   email: string;
+  name: string | null;
+  department_name: string | null;
   role: "admin" | "member";
   created_at: string;
 }
@@ -138,6 +140,11 @@ export interface ChatSource {
 export interface ChatResponse {
   answer: string;
   sources: ChatSource[];
+}
+
+export interface ChatHistoryTurn {
+  role: "user" | "assistant";
+  content: string;
 }
 
 export interface UploadResult {
@@ -255,6 +262,6 @@ export const lawsApi = {
 };
 
 export const chatApi = {
-  send: (message: string) =>
-    client.post<ChatResponse>("/chat", { message }).then((r) => r.data),
+  send: (message: string, history: ChatHistoryTurn[] = []) =>
+    client.post<ChatResponse>("/chat", { message, history }).then((r) => r.data),
 };

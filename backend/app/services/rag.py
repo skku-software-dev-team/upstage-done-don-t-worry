@@ -685,6 +685,7 @@ async def answer_with_rag(
     question: str,
     organization_id: uuid.UUID,
     source_type: SourceType = "all",
+    history: list[dict] | None = None,
 ) -> tuple[str, list[Clause], list[LawArticle]]:
     clauses: list[Clause] = []
     articles: list[LawArticle] = []
@@ -697,7 +698,10 @@ async def answer_with_rag(
         or (source_type == "law_article" and t["function"]["name"] != "search_document_clauses")
     ]
     system_prompt = _agent_system_prompt()
-    messages: list[dict] = [{"role": "user", "content": question}]
+    # Prior turns (separate HTTP requests, not to be confused with this same
+    # call's own tool-calling round-trips below) so follow-up questions like
+    # "그거 좀 더 자세히" resolve against what was actually just discussed.
+    messages: list[dict] = [*(history or []), {"role": "user", "content": question}]
     answer = ""
 
     for _ in range(MAX_TOOL_ITERATIONS):

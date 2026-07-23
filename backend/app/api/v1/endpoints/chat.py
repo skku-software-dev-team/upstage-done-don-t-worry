@@ -17,7 +17,11 @@ async def chat(
     db: AsyncSession = Depends(get_db),
 ):
     answer, clauses, articles = await answer_with_rag(
-        db, body.message, current_user.organization_id, body.source_type
+        db,
+        body.message,
+        current_user.organization_id,
+        body.source_type,
+        history=[{"role": h.role, "content": h.content} for h in body.history],
     )
     sources = [
         ChatSource(

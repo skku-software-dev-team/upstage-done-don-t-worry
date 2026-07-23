@@ -29,6 +29,7 @@ function Header() {
 
   return (
     <header
+      className="no-print"
       style={{
         height: 64,
         display: "flex",
