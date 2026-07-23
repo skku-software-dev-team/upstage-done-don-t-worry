@@ -86,7 +86,7 @@ async def chat_completion(messages: list[dict], context: str = "", system_prompt
                 "messages": [{"role": "system", "content": system_prompt}, *messages],
                 "temperature": 0.3,
             },
-            timeout=60.0,
+            timeout=180.0,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
