@@ -7,10 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
-from app.models.compliance import Invite, Organization, User
+from app.models.compliance import Department, Invite, Organization, User
 from app.schemas.compliance import (
     AcceptInviteRequest,
     AuthMeResponse,
+    DepartmentRead,
     LoginRequest,
     OrganizationRead,
     SignupRequest,
@@ -19,6 +20,14 @@ from app.schemas.compliance import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.get("/departments", response_model=list[DepartmentRead])
+async def list_departments_public(db: AsyncSession = Depends(get_db)):
+    """Public (no auth) — signup/accept-invite forms need the department
+    dropdown before a token exists."""
+    result = await db.execute(select(Department).order_by(Department.name))
+    return result.scalars().all()
 
 
 @router.post("/signup", response_model=TokenResponse, status_code=201)
@@ -35,6 +44,8 @@ async def signup(body: SignupRequest, db: AsyncSession = Depends(get_db)):
         organization_id=org.id,
         email=body.email,
         hashed_password=hash_password(body.password),
+        name=body.name,
+        department_id=body.department_id,
         role="admin",
     )
     db.add(user)
@@ -59,6 +70,8 @@ async def accept_invite(body: AcceptInviteRequest, db: AsyncSession = Depends(ge
         organization_id=invite.organization_id,
         email=body.email,
         hashed_password=hash_password(body.password),
+        name=body.name,
+        department_id=body.department_id,
         role="member",
     )
     db.add(user)

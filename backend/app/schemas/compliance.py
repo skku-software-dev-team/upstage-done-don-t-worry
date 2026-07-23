@@ -136,6 +136,8 @@ class SignupRequest(BaseModel):
     org_name: str
     email: str
     password: str
+    name: str
+    department_id: uuid.UUID | None = None
 
 
 class LoginRequest(BaseModel):
@@ -151,6 +153,8 @@ class TokenResponse(BaseModel):
 class UserRead(BaseModel):
     id: uuid.UUID
     email: str
+    name: str | None
+    department_id: uuid.UUID | None
     role: str
 
     model_config = {"from_attributes": True}
@@ -160,6 +164,8 @@ class AcceptInviteRequest(BaseModel):
     token: str
     email: str
     password: str
+    name: str
+    department_id: uuid.UUID | None = None
 
 
 class InviteRead(BaseModel):
@@ -191,6 +197,8 @@ class AuthMeResponse(BaseModel):
 class MemberRead(BaseModel):
     id: uuid.UUID
     email: str
+    name: str | None
+    department_name: str | None = None
     role: str
     created_at: datetime
 

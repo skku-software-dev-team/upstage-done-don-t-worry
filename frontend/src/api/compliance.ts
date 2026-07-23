@@ -114,6 +114,8 @@ export interface JiraConnectInput {
 export interface Member {
   id: string;
   email: string;
+  name: string | null;
+  department_name: string | null;
   role: "admin" | "member";
   created_at: string;
 }
