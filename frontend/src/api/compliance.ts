@@ -140,6 +140,11 @@ export interface ChatResponse {
   sources: ChatSource[];
 }
 
+export interface ChatHistoryTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface UploadResult {
   message: string;
   clauses: number;
@@ -255,6 +260,6 @@ export const lawsApi = {
 };
 
 export const chatApi = {
-  send: (message: string) =>
-    client.post<ChatResponse>("/chat", { message }).then((r) => r.data),
+  send: (message: string, history: ChatHistoryTurn[] = []) =>
+    client.post<ChatResponse>("/chat", { message, history }).then((r) => r.data),
 };

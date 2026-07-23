@@ -244,9 +244,15 @@ class ClauseLawRefRead(BaseModel):
 
 
 # Chat
+class ChatHistoryTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatMessage(BaseModel):
     message: str
     source_type: Literal["clause", "law_article", "all"] = "all"
+    history: list[ChatHistoryTurn] = []
 
 
 class ChatSource(BaseModel):

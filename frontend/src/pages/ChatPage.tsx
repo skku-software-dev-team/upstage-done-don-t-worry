@@ -4,6 +4,10 @@ import remarkGfm from "remark-gfm";
 import { chatApi, type ChatSource } from "@/api/compliance";
 import { useChat } from "@/context/ChatContext";
 
+// How many prior turns to send back to Solar for conversational context.
+// Capped to keep the request payload/token usage bounded as a chat grows long.
+const MAX_HISTORY_TURNS = 12;
+
 function sourceLabel(s: ChatSource): string {
   return [s.doc_type, s.clause_no, s.title].filter(Boolean).join(" ") || s.id.slice(0, 8);
 }
@@ -72,12 +76,16 @@ export default function ChatPage() {
     const text = input.trim();
     if (!text || loading) return;
 
+    const history = messages
+      .slice(-MAX_HISTORY_TURNS)
+      .map(({ role, content }) => ({ role, content }));
+
     addMessage({ role: "user", content: text });
     setInput("");
     setLoading(true);
 
     try {
-      const res = await chatApi.send(text);
+      const res = await chatApi.send(text, history);
       addMessage({ role: "assistant", content: res.answer, sources: res.sources });
     } catch {
       addMessage({ role: "assistant", content: "오류가 발생했습니다. 잠시 후 다시 시도해주세요." });
