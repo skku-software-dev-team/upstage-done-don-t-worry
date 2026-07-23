@@ -24,7 +24,12 @@ export function exportChecklistToExcel(
   const sheet = XLSX.utils.json_to_sheet(rows);
   sheet["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 60 }, { wch: 12 }];
 
+  // Excel sheet names: max 31 chars, no : \ / ? * [ ]
+  const safeSheetName = sheetName.replace(/[:\\/?*[\]]/g, "").slice(0, 31) || "Sheet1";
+  // Filenames: strip characters invalid on Windows/most filesystems
+  const safeFilename = filename.replace(/[\\/:*?"<>|]/g, "").trim() || "export.xlsx";
+
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
-  XLSX.writeFile(workbook, filename);
+  XLSX.utils.book_append_sheet(workbook, sheet, safeSheetName);
+  XLSX.writeFile(workbook, safeFilename);
 }

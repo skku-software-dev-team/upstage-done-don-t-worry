@@ -28,6 +28,10 @@ function progressBucketOf(status: Status): ProgressStatus | null {
   return status;
 }
 
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export default function ProgressPage() {
   const qc = useQueryClient();
   const { periodId } = useParams<{ periodId?: string }>();
@@ -107,6 +111,9 @@ export default function ProgressPage() {
           .no-print { display: none !important; }
           body { background: white; }
           * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .progress-grid { grid-template-columns: 1fr !important; }
+          .progress-row { page-break-inside: avoid; }
+          .progress-badges { flex-wrap: wrap !important; }
         }
       `}</style>
 
@@ -133,12 +140,6 @@ export default function ProgressPage() {
         >
           {periodId ? `📅 ${viewingPeriod?.label ?? "이전 기록"} 스냅샷` : "진행상황"}
         </h1>
-        {periodId && (
-          <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "#92400e" }}>
-            (현재 아님)
-          </span>
-        )}
-
         <button
           className="no-print"
           onClick={() => window.print()}
@@ -157,17 +158,24 @@ export default function ProgressPage() {
         </button>
         <button
           className="no-print"
-          onClick={() =>
+          onClick={() => {
+            const dateStr = periodId
+              ? (viewingPeriod?.start_date ?? viewingPeriod?.created_at ?? todayStr()).slice(0, 10)
+              : todayStr();
+            const defaultName = `${dateStr} ${periodId ? "스냅샷" : "진행상황"}`;
+            const name = window.prompt("엑셀 파일 이름을 입력하세요.", defaultName);
+            if (name === null) return;
+            const finalName = name.trim() || defaultName;
             exportChecklistToExcel(
               allItems,
               (item) => {
                 const bucket = progressBucketOf(statusOf(item));
                 return bucket === null ? null : statusLabel[bucket];
               },
-              "진행상황",
-              "진행상황.xlsx",
+              finalName,
+              `${finalName}.xlsx`,
             )
-          }
+          }}
           style={{
             padding: "0.4rem 0.9rem",
             borderRadius: 8,
@@ -256,6 +264,7 @@ export default function ProgressPage() {
           </div>
 
           <div
+            className="progress-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
@@ -386,6 +395,7 @@ function ProgressRow({
 }) {
   return (
     <div
+      className="progress-row"
       style={{
         display: "flex",
         alignItems: "center",
@@ -458,7 +468,10 @@ function ProgressRow({
       </span>
 
       {(item.documents.length > 0 || item.department_name) && (
-        <span style={{ marginLeft: "auto", display: "flex", gap: "0.3rem" }}>
+        <span
+          className="progress-badges"
+          style={{ marginLeft: "auto", display: "flex", justifyContent: "flex-end", gap: "0.3rem" }}
+        >
           {item.department_name && (
             <span
               style={{
