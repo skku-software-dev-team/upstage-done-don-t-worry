@@ -74,6 +74,58 @@ DUPLICATE_CANDIDATE_MAX_DISTANCE = 0.35
 # the source list.
 RELEVANCE_MAX_DISTANCE = 0.63
 
+# English security acronyms the embedding model doesn't reliably bridge to the
+# Korean phrasing these documents actually use — measured against ISMS-P
+# 2.5.3's "강화된 인증방식" clause, cosine distance (relevance cutoff is 0.63,
+# see RELEVANCE_MAX_DISTANCE):
+#   "MFA" alone                                          -> 0.93
+#   "MFA가 ISMS-P의 어떤 부분을 만족하는거야?" (unmodified) -> 0.67
+#   same question with "MFA" appended-not-replaced        -> 0.70 (worse!)
+#   same question with "MFA" substituted in place          -> 0.54
+# Substituting in place (not appending) is what actually closes the gap —
+# it keeps the rest of the question's sentence structure intact, which
+# measurably matters more than just having the right words present somewhere
+# in the text. One primary Korean term per acronym, not several: testing
+# showed piling on synonyms ("다중 인증 강화된 인증방식 이중 인증") scored
+# *worse* than the single closest-matching term alone.
+ACRONYM_SYNONYMS: dict[str, str] = {
+    "MFA": "강화된 인증방식",
+    "2FA": "이중 인증",
+    "SSO": "통합 인증",
+    "OTP": "일회용 비밀번호",
+    "RBAC": "역할기반 접근통제",
+    "IAM": "계정 및 권한 관리",
+    "DLP": "정보유출 방지",
+    "SIEM": "보안관제",
+    "VPN": "가상사설망",
+    "WAF": "웹방화벽",
+    "IDS": "침입탐지",
+    "IPS": "침입차단",
+    "SOC": "보안관제센터",
+    "DR": "재해복구",
+    "BCP": "업무연속성계획",
+    "KMS": "암호키 관리",
+    "MDM": "모바일 기기 관리",
+    "EDR": "엔드포인트 탐지대응",
+}
+# (?<![A-Za-z0-9]) / (?![A-Za-z0-9]) instead of \b: Korean questions glue
+# particles straight onto the acronym with no space ("MFA가", "SSO는") — \b
+# doesn't fire there because Python's \w treats Hangul as a word character
+# too, so "A" and "가" don't count as a boundary. Only ASCII letters/digits
+# should block a match (so "SOC" doesn't match inside "SOCIAL").
+ACRONYM_RE = re.compile(
+    r"(?<![A-Za-z0-9])(" + "|".join(re.escape(k) for k in ACRONYM_SYNONYMS) + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _expand_query_for_embedding(query: str) -> str:
+    """Substitute recognized English security acronyms with their Korean
+    equivalent in place before embedding (see ACRONYM_SYNONYMS comment for
+    why substitution, not appending). No-op if the query has none of these
+    acronyms."""
+    return ACRONYM_RE.sub(lambda m: ACRONYM_SYNONYMS[m.group(1).upper()], query)
+
 
 async def search_similar_clauses(
     db: AsyncSession,
@@ -83,7 +135,7 @@ async def search_similar_clauses(
     source_type: SourceType = "all",
     max_distance: float = RELEVANCE_MAX_DISTANCE,
 ) -> list[Clause]:
-    query_vec = await embed_text(query, is_query=True)
+    query_vec = await embed_text(_expand_query_for_embedding(query), is_query=True)
     distance = Embedding.embedding.cosine_distance(query_vec)
 
     stmt = (
@@ -113,7 +165,7 @@ async def search_similar_articles(
     top_k: int = 5,
     max_distance: float = RELEVANCE_MAX_DISTANCE,
 ) -> list[LawArticle]:
-    query_vec = await embed_text(query, is_query=True)
+    query_vec = await embed_text(_expand_query_for_embedding(query), is_query=True)
     distance = Embedding.embedding.cosine_distance(query_vec)
 
     result = await db.execute(
@@ -301,6 +353,170 @@ async def search_checklist_history(
     ]
 
 
+def _norm_text(s: str | None) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
+async def _match_clauses_for_diff(
+    db: AsyncSession, old_doc_id: uuid.UUID, new_doc_id: uuid.UUID
+) -> tuple[list[Clause], list[Clause], list[tuple[Clause, Clause]], list[tuple[Clause, Clause]]]:
+    """Classify every clause between two document versions as added / removed /
+    modified / unchanged. Matching is layered, most-confident first:
+    1. clauses already linked to the same CanonicalItem via CanonicalMap —
+       reuses the Solar-driven duplicate detection that already ran at upload
+       time, so a clause that got renumbered or reworded but is still the same
+       requirement still matches.
+    2. exact clause_no match, for whatever step 1 didn't resolve.
+    3. exact title match, for whatever step 2 didn't resolve.
+    Anything left unmatched on the new side is added; on the old side, removed.
+
+    Returns (added_clauses, removed_clauses, modified_pairs, unchanged_pairs).
+    """
+    old_clauses = (
+        await db.execute(select(Clause).where(Clause.document_id == old_doc_id))
+    ).scalars().all()
+    new_clauses = (
+        await db.execute(select(Clause).where(Clause.document_id == new_doc_id))
+    ).scalars().all()
+
+    all_clause_ids = [c.id for c in old_clauses] + [c.id for c in new_clauses]
+    canonical_by_clause: dict[uuid.UUID, uuid.UUID] = {}
+    if all_clause_ids:
+        rows = await db.execute(
+            select(CanonicalMap.clause_id, CanonicalMap.canonical_id).where(
+                CanonicalMap.clause_id.in_(all_clause_ids)
+            )
+        )
+        for clause_id, canonical_id in rows.all():
+            canonical_by_clause.setdefault(clause_id, canonical_id)
+
+    matched_old_ids: set[uuid.UUID] = set()
+    matched_new_ids: set[uuid.UUID] = set()
+    pairs: list[tuple[Clause, Clause]] = []
+
+    old_by_canonical: dict[uuid.UUID, Clause] = {}
+    for c in old_clauses:
+        cid = canonical_by_clause.get(c.id)
+        if cid is not None:
+            old_by_canonical.setdefault(cid, c)
+    new_by_canonical: dict[uuid.UUID, Clause] = {}
+    for c in new_clauses:
+        cid = canonical_by_clause.get(c.id)
+        if cid is not None:
+            new_by_canonical.setdefault(cid, c)
+    for cid, old_c in old_by_canonical.items():
+        new_c = new_by_canonical.get(cid)
+        if new_c is not None:
+            pairs.append((old_c, new_c))
+            matched_old_ids.add(old_c.id)
+            matched_new_ids.add(new_c.id)
+
+    old_by_no = {c.clause_no: c for c in old_clauses if c.id not in matched_old_ids and c.clause_no}
+    new_by_no = {c.clause_no: c for c in new_clauses if c.id not in matched_new_ids and c.clause_no}
+    for no, old_c in old_by_no.items():
+        new_c = new_by_no.get(no)
+        if new_c is not None:
+            pairs.append((old_c, new_c))
+            matched_old_ids.add(old_c.id)
+            matched_new_ids.add(new_c.id)
+
+    old_by_title = {_norm_text(c.title): c for c in old_clauses if c.id not in matched_old_ids and _norm_text(c.title)}
+    new_by_title = {_norm_text(c.title): c for c in new_clauses if c.id not in matched_new_ids and _norm_text(c.title)}
+    for title, old_c in old_by_title.items():
+        new_c = new_by_title.get(title)
+        if new_c is not None:
+            pairs.append((old_c, new_c))
+            matched_old_ids.add(old_c.id)
+            matched_new_ids.add(new_c.id)
+
+    added = [c for c in new_clauses if c.id not in matched_new_ids]
+    removed = [c for c in old_clauses if c.id not in matched_old_ids]
+    modified = [(o, n) for o, n in pairs if _norm_text(o.requirement) != _norm_text(n.requirement)]
+    modified_ids = {n.id for _, n in modified}
+    unchanged = [(o, n) for o, n in pairs if n.id not in modified_ids]
+
+    return added, removed, modified, unchanged
+
+
+async def compare_document_versions(
+    db: AsyncSession, organization_id: uuid.UUID, doc_type_query: str
+) -> str:
+    """Find the current version of a document (by doc_type or name, fuzzy
+    match) and its most recent earlier version, then return a text block
+    listing added/removed/modified clauses for Solar to read and explain in
+    its own words — this tool deliberately does NOT generate the explanation
+    itself, it just hands Solar the raw before/after clause text.
+
+    "Current" = the active document among matches (or the newest match if
+    none are active); "previous" = the newest match created before that one.
+    No explicit supersedes link is stored — created_at + doc_type is what
+    every other version-supersession feature in this app already relies on
+    (see documents.py's is_active toggling).
+    """
+    doc_type_query = (doc_type_query or "").strip()
+    if not doc_type_query:
+        return "비교할 문서 유형을 알 수 없습니다."
+
+    docs = (
+        await db.execute(select(Document).where(Document.organization_id == organization_id))
+    ).scalars().all()
+    if not docs:
+        return "업로드된 문서가 없습니다."
+
+    q = doc_type_query.lower()
+    matching = [d for d in docs if q in d.doc_type.lower() or q in d.name.lower()]
+    if not matching:
+        return f"'{doc_type_query}'에 해당하는 문서를 찾을 수 없습니다."
+
+    active_matches = [d for d in matching if d.is_active]
+    new_doc = max(active_matches, key=lambda d: d.created_at) if active_matches else max(matching, key=lambda d: d.created_at)
+
+    # <= (not <): Postgres's now() is transaction-time, so two documents
+    # created in the same transaction/millisecond can carry an identical
+    # timestamp — id != new_doc.id already rules out comparing new_doc to itself.
+    older = [d for d in matching if d.id != new_doc.id and d.created_at <= new_doc.created_at]
+    if not older:
+        return f"'{new_doc.name}'과 비교할 이전 버전 문서를 찾을 수 없습니다."
+    old_doc = max(older, key=lambda d: d.created_at)
+
+    added, removed, modified, unchanged = await _match_clauses_for_diff(db, old_doc.id, new_doc.id)
+
+    if not added and not removed and not modified:
+        return f"[{old_doc.name}] → [{new_doc.name}] 비교 결과: 변경된 조항이 없습니다 (동일 {len(unchanged)}개)."
+
+    # Cap how many "동일한 조항" get listed by identity — this is here purely so
+    # Solar has real clause_no/title to cite if it mentions unchanged clauses at
+    # all; it was observed inventing a plausible-looking clause number when the
+    # tool only reported a bare count with nothing concrete backing it.
+    UNCHANGED_LIST_CAP = 15
+
+    parts = [f"[{old_doc.name}] (이전) → [{new_doc.name}] (신규) 비교 결과"]
+    if modified:
+        parts.append(f"\n변경된 조항 ({len(modified)}개):")
+        for old_c, new_c in modified:
+            no = new_c.clause_no or old_c.clause_no or "?"
+            title = new_c.title or old_c.title or ""
+            parts.append(
+                f"- {no} {title}\n  이전: {old_c.requirement or '(내용 없음)'}\n  신규: {new_c.requirement or '(내용 없음)'}"
+            )
+    if added:
+        parts.append(f"\n추가된 조항 ({len(added)}개):")
+        for c in added:
+            parts.append(f"- {c.clause_no or '?'} {c.title or ''}: {c.requirement or '(내용 없음)'}")
+    if removed:
+        parts.append(f"\n삭제된 조항 ({len(removed)}개):")
+        for c in removed:
+            parts.append(f"- {c.clause_no or '?'} {c.title or ''}: {c.requirement or '(내용 없음)'}")
+    if unchanged:
+        parts.append(f"\n동일한 조항 ({len(unchanged)}개):")
+        for _, new_c in unchanged[:UNCHANGED_LIST_CAP]:
+            parts.append(f"- {new_c.clause_no or '?'} {new_c.title or ''}")
+        if len(unchanged) > UNCHANGED_LIST_CAP:
+            parts.append(f"- ... 외 {len(unchanged) - UNCHANGED_LIST_CAP}개")
+
+    return "\n".join(parts)
+
+
 def _build_tools() -> list[dict]:
     return [
         {
@@ -367,6 +583,28 @@ def _build_tools() -> list[dict]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "compare_document_versions",
+                "description": (
+                    "같은 종류 문서의 최신 버전과 그 이전 버전을 비교해서 추가/삭제/변경된 "
+                    "조항을 조회합니다. '이번 개정판에서 뭐가 바뀌었어', '작년 버전이랑 "
+                    "달라진 점' 같은 문서 버전 비교 질문에 사용하세요. 특정 조항 하나의 "
+                    "내용을 묻는 질문에는 사용하지 마세요."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "doc_type": {
+                            "type": "string",
+                            "description": "비교할 문서의 유형 또는 이름 (예: ISMS-P, CSAP)",
+                        },
+                    },
+                    "required": ["doc_type"],
+                },
+            },
+        },
     ]
 
 
@@ -380,7 +618,12 @@ def _agent_system_prompt() -> str:
         "- 법률/법조문 질문 → search_law_articles\n"
         "- '언제 뭘 완료했는지', '이번 달 진행상황' 등 체크리스트 이력/날짜 질문 → "
         "search_checklist_history (\"7월 후반\", \"지난주\" 같은 상대적 날짜 표현은 오늘 "
-        "날짜를 기준으로 YYYY-MM-DD로 직접 환산해서 전달하세요)\n\n"
+        "날짜를 기준으로 YYYY-MM-DD로 직접 환산해서 전달하세요)\n"
+        "- '이번 개정판에서 뭐가 바뀌었어', '작년 버전이랑 달라진 점' 등 문서 버전 비교 질문 → "
+        "compare_document_versions. 도구 결과에는 조항별 이전/신규 원문이 그대로 담겨 있으니, "
+        "그 내용을 직접 비교해서 무엇이 어떻게 달라졌는지 자연스러운 문장으로 요약해서 "
+        "답하세요 (도구가 이미 판단한 추가/삭제/변경 분류를 그대로 나열하지만 말고, 각 "
+        "변경이 실질적으로 무슨 의미인지 설명하세요).\n\n"
         "도구 결과에 없는 내용은 답하지 말고, 결과가 비어 있으면 모른다고 답하세요. "
         "일반 상식으로 채워 넣지 마세요. 문서 조항/법조문을 인용할 때는 결과에 표시된 "
         "[문서명 조항번호] 또는 [법률명 조항번호] 형식을 답변 문장 안에 그대로 살려서 쓰세요 "
@@ -502,6 +745,8 @@ async def answer_with_rag(
                     end_date=args.get("end_date"),
                 )
                 tool_content = _format_history_for_tool(history)
+            elif name == "compare_document_versions":
+                tool_content = await compare_document_versions(db, organization_id, args.get("doc_type", ""))
             else:
                 tool_content = "알 수 없는 도구입니다."
                 logger.warning("chat agent requested unknown tool: %s", name)
