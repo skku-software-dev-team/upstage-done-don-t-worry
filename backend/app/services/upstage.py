@@ -1,10 +1,13 @@
 import asyncio
 import json
+import logging
 import re
 
 import httpx
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 UPSTAGE_BASE_URL = "https://api.upstage.ai/v1"
 
@@ -38,9 +41,13 @@ async def embed_text(text: str, is_query: bool = False) -> list[float]:
             if resp.status_code == 429:
                 await asyncio.sleep(2 ** attempt)  # 1,2,4,8,16s
                 continue
+            if resp.status_code >= 400:
+                logger.error("Upstage embeddings %s: %s", resp.status_code, resp.text[:2000])
             resp.raise_for_status()
             return resp.json()["data"][0]["embedding"]
         # Final attempt raises if still failing
+        if resp.status_code >= 400:
+            logger.error("Upstage embeddings %s: %s", resp.status_code, resp.text[:2000])
         resp.raise_for_status()
         return resp.json()["data"][0]["embedding"]
 
