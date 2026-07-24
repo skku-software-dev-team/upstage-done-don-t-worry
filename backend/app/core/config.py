@@ -1,9 +1,14 @@
 import os
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_DATABASE_URL = "postgresql+asyncpg://upstage:upstage@localhost:5432/compliance"
+
+# libpq-only connection params (from psql-style connection strings) that
+# asyncpg.connect() doesn't accept and raises TypeError on if passed through.
+_UNSUPPORTED_ASYNCPG_QUERY_KEYS = {"channel_binding"}
 
 
 class Settings(BaseSettings):
@@ -26,7 +31,15 @@ class Settings(BaseSettings):
             url = "postgresql+asyncpg://" + url[len("postgres://"):]
         elif url.startswith("postgresql://"):
             url = "postgresql+asyncpg://" + url[len("postgresql://"):]
-        url = url.replace("sslmode=", "ssl=")
+
+        parts = urlsplit(url)
+        query_pairs = [
+            ("ssl" if key == "sslmode" else key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if key not in _UNSUPPORTED_ASYNCPG_QUERY_KEYS
+        ]
+        url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_pairs), parts.fragment))
+
         self.database_url = url
         return self
 
