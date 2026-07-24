@@ -7,7 +7,10 @@ app = FastAPI(title="Compliance Checker", version="0.1.0", redirect_slashes=Fals
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://upstage-done-don-t-worry.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
