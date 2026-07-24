@@ -97,29 +97,45 @@ function Header() {
   );
 }
 
+// ChatProvider is keyed by the logged-in user's id: logout()/login() only
+// flip React state (no full page reload — see AuthContext.logout), so
+// without a key change ChatProvider would never unmount and its in-memory
+// `messages` array would survive across accounts. That's exactly what let a
+// stale "no results" answer from a previous session keep poisoning the
+// tool-calling agent's context after logging back in — clearing
+// localStorage alone isn't enough because the next addMessage() call just
+// re-persists the still-live in-memory history over it. Keying forces a
+// fresh ChatProvider (and empty history) on every account switch.
+function AppMain() {
+  const { user } = useAuth();
+
+  return (
+    <main>
+      <ChatProvider key={user?.id ?? "anon"}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/invite/:token" element={<AcceptInvitePage />} />
+          <Route path="/" element={<ProtectedRoute><DocumentsPage /></ProtectedRoute>} />
+          <Route path="/members" element={<ProtectedRoute><MembersPage /></ProtectedRoute>} />
+          <Route path="/laws" element={<ProtectedRoute><LawsPage /></ProtectedRoute>} />
+          <Route path="/checklist" element={<ProtectedRoute><ChecklistPage /></ProtectedRoute>} />
+          <Route path="/progress" element={<ProtectedRoute><ProgressPage /></ProtectedRoute>} />
+          <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
+          <Route path="/history/:periodId" element={<ProtectedRoute><ProgressPage /></ProtectedRoute>} />
+          <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
+        </Routes>
+      </ChatProvider>
+    </main>
+  );
+}
+
 export default function App() {
   return (
     <AuthProvider>
       <div style={{ fontFamily: "system-ui, sans-serif", minHeight: "100vh", background: "#fafafa" }}>
         <Header />
-
-        <main>
-          <ChatProvider>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/signup" element={<SignupPage />} />
-              <Route path="/invite/:token" element={<AcceptInvitePage />} />
-              <Route path="/" element={<ProtectedRoute><DocumentsPage /></ProtectedRoute>} />
-              <Route path="/members" element={<ProtectedRoute><MembersPage /></ProtectedRoute>} />
-              <Route path="/laws" element={<ProtectedRoute><LawsPage /></ProtectedRoute>} />
-              <Route path="/checklist" element={<ProtectedRoute><ChecklistPage /></ProtectedRoute>} />
-              <Route path="/progress" element={<ProtectedRoute><ProgressPage /></ProtectedRoute>} />
-              <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
-              <Route path="/history/:periodId" element={<ProtectedRoute><ProgressPage /></ProtectedRoute>} />
-              <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
-            </Routes>
-          </ChatProvider>
-        </main>
+        <AppMain />
       </div>
     </AuthProvider>
   );
